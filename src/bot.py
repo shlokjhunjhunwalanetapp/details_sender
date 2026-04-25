@@ -18,6 +18,7 @@ from src.charting import create_price_charts
 from src.config import Config
 from src.formatter import render_fundamentals_table
 from src.fundamentals_fetcher import fetch_fundamentals
+from src.news_classifier import classify_headline, is_duplicate_title, title_fingerprint
 from src.news_fetcher import NewsItem, fetch_stock_news
 from src.portfolio_parser import comma_join, parse_tickers_from_text
 
@@ -264,7 +265,9 @@ def _process_commands(client: TelegramClient, state: BotState, configured_chat_i
 
 def _format_headline(item: NewsItem) -> str:
     source = item.source or "Unknown"
-    return f"- {source}: {item.title}"
+    label = classify_headline(item.title)
+    prefix = f"{label} " if label else ""
+    return f"- {prefix}{source}: {item.title}"
 
 
 def run_bot_cycle(config: Config, commands_only: bool = False) -> None:
@@ -315,12 +318,25 @@ def run_bot_cycle(config: Config, commands_only: bool = False) -> None:
 
     sent_hashes_set = set(state.sent_hashes)
     by_ticker: dict[str, list[NewsItem]] = {ticker: [] for ticker in tickers}
+    # Per-ticker title fingerprints for within-cycle near-duplicate detection.
+    # Kept per-ticker to avoid false positives between different companies.
+    ticker_fingerprints: dict[str, list[frozenset[str]]] = {t: [] for t in tickers}
     for item in all_news:
         if not _published_after(item, lower_bound_utc):
             continue
+        # Exact dedup — same article URL/title/source seen in any prior cycle.
         digest = _news_hash(item)
         if digest in sent_hashes_set:
             continue
+        # Near-duplicate dedup — same story from a different source this cycle.
+        fp = title_fingerprint(item.title)
+        ticker_fps = ticker_fingerprints.setdefault(item.ticker, [])
+        if is_duplicate_title(fp, ticker_fps):
+            logger.info("Skipping near-duplicate headline for %s: %s", item.ticker, item.title[:80])
+            sent_hashes_set.add(digest)
+            state.sent_hashes.append(digest)
+            continue
+        ticker_fps.append(fp)
         sent_hashes_set.add(digest)
         state.sent_hashes.append(digest)
         by_ticker.setdefault(item.ticker, []).append(item)
