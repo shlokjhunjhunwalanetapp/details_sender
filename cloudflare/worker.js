@@ -355,62 +355,71 @@ async function handleCommand(text, chatId, env) {
   }
 
   if (cmd === "addstock") {
-    const ticker = parseSingleTicker(text, "addstock");
-    if (!ticker) {
-      // Show search button (one at a time) AND a hint for bulk add.
+    const inputTickers = parseTickersFromText(text, "addstock");
+
+    if (!inputTickers.length) {
       await sendMessageWithKeyboard(
         chatId,
-        "How would you like to add stocks?\n\n• Tap 🔍 to search and add one stock\n• Use /updatestocks RELIANCE, TCS, HAL to add multiple at once",
-        {
-          inline_keyboard: [
-            [{ text: "🔍 Search & add a stock", switch_inline_query_current_chat: "" }],
-          ],
-        },
+        "Add one or more stocks:\n\n• /addstock SUZLON\n• /addstock SUZLON, HAL, RELIANCE\n• Or tap 🔍 to search by name",
+        { inline_keyboard: [[{ text: "🔍 Search & add a stock", switch_inline_query_current_chat: "" }]] },
         env,
       );
-      return;
-    }
-    // Validate ticker against NSE registry before adding.
-    const check = await validateAndSuggest(ticker, env);
-    if (!check.valid) {
-      let msg = `⚠️ "${ticker}" is not a recognised NSE ticker and may produce no results.\n`;
-      if (check.suggestions.length) {
-        msg += "\nDid you mean:\n";
-        msg += check.suggestions.map(s => `  • ${s.sym} — ${s.name}`).join("\n");
-        msg += "\n\nOr use 🔍 to search by company name.";
-      } else {
-        msg += "\nUse 🔍 to search by company name instead.";
-      }
-      const keyboard = { inline_keyboard: [] };
-      // Add quick-tap buttons for suggestions.
-      if (check.suggestions.length) {
-        keyboard.inline_keyboard.push(
-          check.suggestions.map(s => ({ text: `${s.sym}`, callback_data: `/addstock ${s.sym}` }))
-        );
-      }
-      keyboard.inline_keyboard.push([{ text: "🔍 Search by name", switch_inline_query_current_chat: "" }]);
-      await sendMessageWithKeyboard(chatId, msg, keyboard, env);
       return;
     }
 
-    const tickers = await getPortfolio(env);
-    if (tickers.includes(ticker)) {
-      await sendMessageWithKeyboard(
-        chatId,
-        `${ticker} (${check.name}) is already in your watchlist.\n\n${await formatPortfolio(tickers, env)}`,
-        { inline_keyboard: [[{ text: "🔍 Add another stock", switch_inline_query_current_chat: "" }]] },
-        env,
-      );
-      return;
+    const portfolio = await getPortfolio(env);
+    const added = [];
+    const alreadyIn = [];
+    const invalid = [];   // { sym, suggestions[] }
+
+    for (const ticker of inputTickers) {
+      if (portfolio.includes(ticker)) {
+        alreadyIn.push(ticker);
+        continue;
+      }
+      const check = await validateAndSuggest(ticker, env);
+      if (!check.valid) {
+        invalid.push({ sym: ticker, suggestions: check.suggestions });
+        continue;
+      }
+      portfolio.push(ticker);
+      added.push({ sym: ticker, name: check.name });
     }
-    tickers.push(ticker);
-    await savePortfolio(tickers, env);
-    await sendMessageWithKeyboard(
-      chatId,
-      `✅ Added ${check.name} (${ticker}).\n\n${await formatPortfolio(tickers, env)}`,
-      { inline_keyboard: [[{ text: "🔍 Add another stock", switch_inline_query_current_chat: "" }]] },
-      env,
-    );
+
+    if (added.length) await savePortfolio(portfolio, env);
+
+    // Build reply message.
+    const lines = [];
+    if (added.length) {
+      lines.push(`✅ Added (${added.length}):\n` + added.map(a => `  • ${a.name} (${a.sym})`).join("\n"));
+    }
+    if (alreadyIn.length) {
+      lines.push(`ℹ️ Already in watchlist:\n` + alreadyIn.map(t => `  • ${t}`).join("\n"));
+    }
+    if (invalid.length) {
+      for (const inv of invalid) {
+        let msg = `⚠️ "${inv.sym}" not recognised.`;
+        if (inv.suggestions.length) {
+          msg += " Did you mean: " + inv.suggestions.map(s => s.sym).join(", ") + "?";
+        }
+        lines.push(msg);
+      }
+    }
+
+    if (added.length || alreadyIn.length) {
+      lines.push("\n" + await formatPortfolio(portfolio, env));
+    }
+
+    const keyboard = { inline_keyboard: [[{ text: "🔍 Add more stocks", switch_inline_query_current_chat: "" }]] };
+
+    // If there were invalid tickers and single input, show suggestion buttons.
+    if (invalid.length === 1 && inputTickers.length === 1 && invalid[0].suggestions.length) {
+      keyboard.inline_keyboard.unshift(
+        invalid[0].suggestions.map(s => ({ text: s.sym, callback_data: `/addstock ${s.sym}` }))
+      );
+    }
+
+    await sendMessageWithKeyboard(chatId, lines.join("\n\n"), keyboard, env);
     return;
   }
 
