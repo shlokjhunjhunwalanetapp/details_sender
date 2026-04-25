@@ -6,7 +6,7 @@ import logging
 import os
 import tempfile
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -20,14 +20,13 @@ from src.formatter import render_fundamentals_table
 from src.fundamentals_fetcher import fetch_fundamentals
 from src.news_fetcher import NewsItem, fetch_stock_news
 from src.portfolio_parser import comma_join, parse_tickers_from_text
-from src.verifier import VerifiedNews, verify_news_batch
 
 
 logger = logging.getLogger(__name__)
 
 DATA_DIR = Path("data")
 PORTFOLIO_PATH = DATA_DIR / "portfolio.json"
-REQUEST_BUDGET_PATH = DATA_DIR / "request_budget.json"
+STATE_PATH = DATA_DIR / "request_budget.json"
 CHART_DIR = Path("tmp/charts")
 
 
@@ -55,9 +54,7 @@ def _to_int(value: Any, default: int = 0) -> int:
 
 
 @dataclass
-class BudgetState:
-    date: str
-    llm_requests_used: int
+class BotState:
     telegram_offset: int
     sent_hashes: list[str]
     last_full_cycle_at: str
@@ -117,12 +114,10 @@ def _ensure_files() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     if not PORTFOLIO_PATH.exists():
         _write_json(PORTFOLIO_PATH, {"tickers": [], "updated_at": ""})
-    if not REQUEST_BUDGET_PATH.exists():
+    if not STATE_PATH.exists():
         _write_json(
-            REQUEST_BUDGET_PATH,
+            STATE_PATH,
             {
-                "date": "",
-                "llm_requests_used": 0,
                 "telegram_offset": 0,
                 "sent_hashes": [],
                 "last_full_cycle_at": "",
@@ -152,33 +147,21 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
             temp_path.unlink(missing_ok=True)
 
 
-def _load_budget(today: str) -> BudgetState:
-    raw = _read_json(REQUEST_BUDGET_PATH)
-    if raw.get("date") != today:
-        return BudgetState(
-            date=today,
-            llm_requests_used=0,
-            telegram_offset=_to_int(raw.get("telegram_offset", 0)),
-            sent_hashes=[],
-            last_full_cycle_at=str(raw.get("last_full_cycle_at", "")),
-        )
-    return BudgetState(
-        date=today,
-        llm_requests_used=max(_to_int(raw.get("llm_requests_used", 0)), 0),
+def _load_state() -> BotState:
+    raw = _read_json(STATE_PATH)
+    return BotState(
         telegram_offset=max(_to_int(raw.get("telegram_offset", 0)), 0),
         sent_hashes=list(raw.get("sent_hashes", [])),
         last_full_cycle_at=str(raw.get("last_full_cycle_at", "")),
     )
 
 
-def _save_budget(state: BudgetState) -> None:
+def _save_state(state: BotState) -> None:
     _write_json(
-        REQUEST_BUDGET_PATH,
+        STATE_PATH,
         {
-            "date": state.date,
-            "llm_requests_used": state.llm_requests_used,
             "telegram_offset": state.telegram_offset,
-            "sent_hashes": state.sent_hashes[-500:],
+            "sent_hashes": state.sent_hashes[-1000:],
             "last_full_cycle_at": state.last_full_cycle_at,
         },
     )
@@ -203,40 +186,52 @@ def _is_market_hours(config: Config, now: datetime) -> bool:
     return config.market_open <= current_time <= config.market_close
 
 
-def _should_run_full_cycle(config: Config, now: datetime) -> bool:
-    if _is_market_hours(config, now):
-        return True
-    return False
-
-
-def _should_run_offhours_cycle(now: datetime, last_full_cycle_at: str) -> bool:
-    if not last_full_cycle_at:
-        return True
-    try:
-        last_run = datetime.fromisoformat(last_full_cycle_at)
-    except ValueError:
-        return True
-    if last_run.tzinfo is None:
-        last_run = last_run.replace(tzinfo=now.tzinfo)
-    # GitHub schedule can drift by a few minutes, so gate by elapsed time.
-    return (now - last_run) >= timedelta(minutes=15)
-
-
 def _news_hash(item: NewsItem) -> str:
     base = f"{item.ticker}|{item.title}|{item.source}|{item.url}|{item.published_at}"
     return hashlib.sha256(base.encode("utf-8")).hexdigest()
 
 
-def _process_commands(client: TelegramClient, budget: BudgetState, configured_chat_id: str) -> tuple[BudgetState, bool]:
+def _interval_lower_bound(
+    last_full_cycle_at: str,
+    fallback_hours: int,
+    now_utc: datetime,
+) -> datetime:
+    """Lower bound for accepting news.
+
+    Returns the timestamp of the previous successful cycle. If there is no
+    previous cycle (first run / corrupted state), falls back to `now - fallback_hours`.
+    """
+    if last_full_cycle_at:
+        try:
+            parsed = datetime.fromisoformat(last_full_cycle_at)
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc)
+        except ValueError:
+            logger.warning("Invalid last_full_cycle_at=%r; falling back to recent window", last_full_cycle_at)
+    return now_utc - timedelta(hours=fallback_hours)
+
+
+def _published_after(item: NewsItem, lower_bound_utc: datetime) -> bool:
     try:
-        updates = client.get_updates(offset=budget.telegram_offset + 1)
+        published = datetime.fromisoformat(item.published_at)
+    except ValueError:
+        return False
+    if published.tzinfo is None:
+        published = published.replace(tzinfo=timezone.utc)
+    return published.astimezone(timezone.utc) > lower_bound_utc
+
+
+def _process_commands(client: TelegramClient, state: BotState, configured_chat_id: str) -> tuple[BotState, bool]:
+    try:
+        updates = client.get_updates(offset=state.telegram_offset + 1)
     except Exception:
         logger.exception("Failed to fetch Telegram updates")
-        return budget, False
+        return state, False
     updated_portfolio = False
 
     for update in updates:
-        budget.telegram_offset = max(budget.telegram_offset, _to_int(update.get("update_id", 0)))
+        state.telegram_offset = max(state.telegram_offset, _to_int(update.get("update_id", 0)))
         message = update.get("message", {})
         chat_id = str(message.get("chat", {}).get("id", ""))
         if configured_chat_id and chat_id != configured_chat_id:
@@ -264,46 +259,38 @@ def _process_commands(client: TelegramClient, budget: BudgetState, configured_ch
         except Exception:
             logger.exception("Failed to send portfolio confirmation to Telegram chat %s", chat_id)
 
-    return budget, updated_portfolio
+    return state, updated_portfolio
 
 
-def _fallback_unverified(items: list[NewsItem], reason: str) -> list[VerifiedNews]:
-    return [
-        VerifiedNews(
-            ticker=item.ticker,
-            title=item.title,
-            url=item.url,
-            source=item.source,
-            authenticity_score=50,
-            verdict="uncertain",
-            confidence="low",
-            reason=reason,
-        )
-        for item in items
-    ]
+def _format_headline(item: NewsItem) -> str:
+    source = item.source or "Unknown"
+    return f"- {source}: {item.title}"
 
 
-def run_bot_cycle(config: Config, commands_only: bool = False, force_verify: bool = False) -> None:
+def run_bot_cycle(config: Config, commands_only: bool = False) -> None:
     _ensure_files()
     now = datetime.now(config.timezone)
-    today = now.date().isoformat()
-    budget = _load_budget(today=today)
+    now_utc = now.astimezone(timezone.utc)
+    state = _load_state()
     client = TelegramClient(config.telegram_bot_token, config.telegram_chat_id)
 
-    budget, _ = _process_commands(client=client, budget=budget, configured_chat_id=config.telegram_chat_id)
+    state, _ = _process_commands(client=client, state=state, configured_chat_id=config.telegram_chat_id)
     if commands_only:
-        _save_budget(budget)
-        return
-    if not force_verify and not _should_run_full_cycle(config, now) and not _should_run_offhours_cycle(now, budget.last_full_cycle_at):
-        logger.info("Skipping full cycle this run (off-hours non-15-minute tick)")
-        _save_budget(budget)
+        _save_state(state)
         return
 
     tickers = _portfolio()
     if not tickers:
         logger.info("No portfolio list available yet")
-        _save_budget(budget)
+        _save_state(state)
         return
+
+    lower_bound_utc = _interval_lower_bound(
+        last_full_cycle_at=state.last_full_cycle_at,
+        fallback_hours=config.news_recent_hours,
+        now_utc=now_utc,
+    )
+    logger.info("Accepting news published after %s UTC", lower_bound_utc.isoformat())
 
     fundamentals = []
     for ticker in tickers:
@@ -311,41 +298,31 @@ def run_bot_cycle(config: Config, commands_only: bool = False, force_verify: boo
             fundamentals.append(fetch_fundamentals(ticker))
         except Exception:
             logger.exception("Failed fetching fundamentals for %s", ticker)
+
     all_news: list[NewsItem] = []
     for ticker in tickers:
         try:
-            all_news.extend(fetch_stock_news(ticker=ticker, max_items=config.max_news_per_stock))
+            # Pull a wide net then filter by interval lower bound below.
+            all_news.extend(
+                fetch_stock_news(
+                    ticker=ticker,
+                    max_items=config.max_news_per_stock,
+                    recent_hours=max(config.news_recent_hours, 24),
+                )
+            )
         except Exception:
             logger.exception("Failed fetching news for %s", ticker)
 
-    unseen_news: list[NewsItem] = []
-    sent_hashes_set = set(budget.sent_hashes)
+    sent_hashes_set = set(state.sent_hashes)
+    by_ticker: dict[str, list[NewsItem]] = {ticker: [] for ticker in tickers}
     for item in all_news:
+        if not _published_after(item, lower_bound_utc):
+            continue
         digest = _news_hash(item)
         if digest in sent_hashes_set:
             continue
-        unseen_news.append(item)
         sent_hashes_set.add(digest)
-        budget.sent_hashes.append(digest)
-
-    should_verify = force_verify or _is_market_hours(config=config, now=now) or budget.llm_requests_used < int(config.llm_daily_cap * 0.8)
-    if unseen_news and should_verify and budget.llm_requests_used < config.llm_daily_cap and config.gemini_api_key:
-        try:
-            verified_news = verify_news_batch(
-                api_key=config.gemini_api_key,
-                model=config.gemini_model,
-                items=unseen_news,
-            )
-            budget.llm_requests_used += 1
-        except Exception:
-            logger.exception("Verification failed, using fallback")
-            verified_news = _fallback_unverified(unseen_news, "Gemini verification failed in this cycle")
-    else:
-        reason = "Verification skipped due to budget/off-hours policy"
-        verified_news = _fallback_unverified(unseen_news, reason)
-
-    by_ticker: dict[str, list[VerifiedNews]] = {ticker: [] for ticker in tickers}
-    for item in verified_news:
+        state.sent_hashes.append(digest)
         by_ticker.setdefault(item.ticker, []).append(item)
 
     for stock_data in fundamentals:
@@ -355,11 +332,10 @@ def run_bot_cycle(config: Config, commands_only: bool = False, force_verify: boo
                 logger.info("Skipping %s: no new headlines this cycle", stock_data.ticker)
                 continue
 
-            news_lines = [f"- {n.verdict}:{n.authenticity_score} {n.title}" for n in news_for_ticker[:3]]
+            news_lines = [_format_headline(n) for n in news_for_ticker[:config.max_news_per_stock]]
             payload = (
                 f"{render_fundamentals_table(stock_data)}\n\n"
-                f"News\n" + "\n".join(news_lines) + "\n\n"
-                f"LLM usage today: {budget.llm_requests_used}/{config.llm_daily_cap}"
+                f"News\n" + "\n".join(news_lines)
             )
             client.send_message(payload)
 
@@ -369,5 +345,5 @@ def run_bot_cycle(config: Config, commands_only: bool = False, force_verify: boo
         except Exception:
             logger.exception("Failed sending update for %s", stock_data.ticker)
 
-    budget.last_full_cycle_at = now.isoformat()
-    _save_budget(budget)
+    state.last_full_cycle_at = now_utc.isoformat()
+    _save_state(state)

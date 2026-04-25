@@ -29,7 +29,7 @@ def _to_iso8601(raw_value: str | None) -> str | None:
         return None
 
 
-def _is_recent(published_at: str, hours: int = 48) -> bool:
+def _is_recent(published_at: str, hours: int) -> bool:
     try:
         published = datetime.fromisoformat(published_at)
     except ValueError:
@@ -37,8 +37,8 @@ def _is_recent(published_at: str, hours: int = 48) -> bool:
     return published >= datetime.now(timezone.utc) - timedelta(hours=hours)
 
 
-def fetch_stock_news(ticker: str, max_items: int = 6) -> list[NewsItem]:
-    query = quote_plus(f"{ticker} stock india nse bse")
+def fetch_stock_news(ticker: str, max_items: int = 6, recent_hours: int = 168) -> list[NewsItem]:
+    query = quote_plus(f"{ticker} stock news")
     rss_url = f"https://news.google.com/rss/search?q={query}&hl=en-IN&gl=IN&ceid=IN:en"
     response = requests.get(rss_url, timeout=REQUEST_TIMEOUT, headers={"User-Agent": USER_AGENT})
     response.raise_for_status()
@@ -49,7 +49,7 @@ def fetch_stock_news(ticker: str, max_items: int = 6) -> list[NewsItem]:
         published_at = _to_iso8601(getattr(entry, "published", None))
         if not published_at:
             continue
-        if not _is_recent(published_at):
+        if not _is_recent(published_at, hours=recent_hours):
             continue
         source = ""
         if getattr(entry, "source", None):

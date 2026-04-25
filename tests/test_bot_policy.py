@@ -1,18 +1,17 @@
-from datetime import datetime, time
+from datetime import datetime, time, timezone
 from zoneinfo import ZoneInfo
 
-from src.bot import _is_market_hours, _should_run_offhours_cycle
+from src.bot import _is_market_hours, _interval_lower_bound, _published_after
 from src.config import Config
+from src.news_fetcher import NewsItem
 
 
 def _config() -> Config:
     return Config(
         telegram_bot_token="x",
         telegram_chat_id="1",
-        gemini_api_key="g",
-        gemini_model="gemini-1.5-flash",
-        llm_daily_cap=1500,
         max_news_per_stock=6,
+        news_recent_hours=24,
         market_open=time(9, 15),
         market_close=time(15, 30),
         timezone=ZoneInfo("Asia/Kolkata"),
@@ -29,15 +28,36 @@ def test_market_hours_false_weekend() -> None:
     assert _is_market_hours(_config(), now) is False
 
 
-def test_offhours_cycle_first_run_allowed() -> None:
-    now = datetime(2026, 4, 26, 10, 31, tzinfo=ZoneInfo("Asia/Kolkata"))
-    assert _should_run_offhours_cycle(now, "") is True
+def test_interval_lower_bound_uses_last_cycle() -> None:
+    now_utc = datetime(2026, 4, 27, 10, 0, tzinfo=timezone.utc)
+    last = datetime(2026, 4, 27, 9, 55, tzinfo=timezone.utc).isoformat()
+    lb = _interval_lower_bound(last, fallback_hours=24, now_utc=now_utc)
+    assert lb == datetime(2026, 4, 27, 9, 55, tzinfo=timezone.utc)
 
 
-def test_offhours_cycle_requires_15_min_elapsed() -> None:
-    now = datetime(2026, 4, 26, 10, 31, tzinfo=ZoneInfo("Asia/Kolkata"))
-    last = datetime(2026, 4, 26, 10, 20, tzinfo=ZoneInfo("Asia/Kolkata")).isoformat()
-    assert _should_run_offhours_cycle(now, last) is False
+def test_interval_lower_bound_falls_back_on_empty() -> None:
+    now_utc = datetime(2026, 4, 27, 10, 0, tzinfo=timezone.utc)
+    lb = _interval_lower_bound("", fallback_hours=24, now_utc=now_utc)
+    assert lb == datetime(2026, 4, 26, 10, 0, tzinfo=timezone.utc)
 
-    later = datetime(2026, 4, 26, 10, 36, tzinfo=ZoneInfo("Asia/Kolkata"))
-    assert _should_run_offhours_cycle(later, last) is True
+
+def _make_item(published_at: str) -> NewsItem:
+    return NewsItem(
+        ticker="TEST",
+        title="headline",
+        url="https://example.com",
+        source="Reuters",
+        published_at=published_at,
+    )
+
+
+def test_published_after_returns_true_for_newer_item() -> None:
+    lower = datetime(2026, 4, 27, 9, 55, tzinfo=timezone.utc)
+    item = _make_item("2026-04-27T10:00:00+00:00")
+    assert _published_after(item, lower) is True
+
+
+def test_published_after_returns_false_for_older_item() -> None:
+    lower = datetime(2026, 4, 27, 9, 55, tzinfo=timezone.utc)
+    item = _make_item("2026-04-27T09:50:00+00:00")
+    assert _published_after(item, lower) is False

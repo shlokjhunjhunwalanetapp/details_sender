@@ -1,27 +1,36 @@
 # Telegram Stock News Bot
 
 Telegram bot for Indian portfolio tracking that:
-- accepts `/updatestocks` in chat,
-- keeps the latest portfolio list for future cycles,
-- fetches latest stock news + fundamentals,
-- verifies all cycle news in one Gemini request,
-- sends a tabular fundamentals report and a chart image.
+- accepts `/updatestocks` in chat to set your watchlist,
+- every cycle, fetches news published **since the previous run** so you only see new headlines,
+- sends a tabular fundamentals report + 3-month, 1-year, and all-time price charts,
+- runs entirely on GitHub Actions — no external services required.
 
 ## How it works
 
-1. `python -m src.main --commands-only` reads Telegram updates and stores the latest `/updatestocks` list in `data/portfolio.json`.
-2. `python -m src.main` uses that saved list, fetches fundamentals/news, verifies news in one Gemini call, then sends results to Telegram.
-3. `data/request_budget.json` tracks daily LLM usage, Telegram update offset, and recent sent news hashes.
+1. `python -m src.main --commands-only` reads Telegram updates and saves the latest `/updatestocks` list in `data/portfolio.json`.
+2. `python -m src.main` loads that list, fetches news and fundamentals, filters to headlines newer than the previous cycle, and sends results to Telegram.
+3. `data/request_budget.json` persists the Telegram offset, sent-news hashes, and the timestamp of the last successful cycle.
 
-## Required secrets and vars
+## Required secrets
 
-Add these in your GitHub repository:
+Add these in your GitHub repository (Settings → Secrets and variables → Actions):
 
-- `TELEGRAM_BOT_TOKEN` (secret)
-- `TELEGRAM_CHAT_ID` (secret)
-- `GEMINI_API_KEY` (secret)
-- `GEMINI_MODEL` (variable, optional; default `gemini-1.5-flash`)
-- `LLM_DAILY_CAP` (variable, optional; default `1500`)
+| Name | Type | Description |
+|---|---|---|
+| `TELEGRAM_BOT_TOKEN` | Secret | Your bot token from @BotFather |
+| `TELEGRAM_CHAT_ID` | Secret | Your personal or group chat ID |
+
+No API keys are needed beyond Telegram.
+
+## Optional variables
+
+| Name | Default | Description |
+|---|---|---|
+| `MAX_NEWS_PER_STOCK` | `6` | Max headlines shown per stock |
+| `NEWS_RECENT_HOURS` | `24` | Fallback window on first run |
+| `MARKET_OPEN` | `09:15` | IST market open time |
+| `MARKET_CLOSE` | `15:30` | IST market close time |
 
 ## Local run
 
@@ -30,24 +39,14 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
-python -m src.main --commands-only
-python -m src.main
+# fill in TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env
+python -m src.main --commands-only   # pick up /updatestocks from Telegram
+python -m src.main                   # send stock updates
 ```
 
-The app auto-loads values from `.env` using `python-dotenv`.
+## GitHub Actions scheduling
 
-## GitHub Actions scheduling model
+- `.github/workflows/scheduled-run.yml` — runs every 5 minutes, sends full updates.
+- `.github/workflows/telegram-webhook.yml` — runs every 5 minutes (offset by 2 min) to pick up `/updatestocks` commands.
 
-GitHub Actions cannot natively run every minute. This project uses GitHub-only scheduling:
-
-- `.github/workflows/scheduled-run.yml`
-  - runs every 5 minutes
-  - bot logic sends full updates every 5 minutes during market hours and every 15 minutes during off-hours
-- `.github/workflows/telegram-webhook.yml`
-  - syncs `/updatestocks` command state every 5 minutes, offset by 2 minutes to reduce overlap
-
-## Notes on request cap
-
-- One Gemini request verifies all fetched news items in each cycle.
-- If daily usage approaches cap or during off-hours pressure, the bot can skip verification and still send data/news with a note.
-
+Both workflows persist state back to the repo so the next run knows which cycle it is and only sends truly new headlines.

@@ -1,7 +1,10 @@
 {
-  "date": "2026-04-25",
-  "llm_requests_used": 0,
-  "telegram_offset": 48581573,
-  "sent_hashes": [],
-  "last_full_cycle_at": ""
+  "telegram_offset": 0,
+  "sent_hashes": [
+    "55e059a7150a0e9ad4b12d5edc9f58bdfaee0ef7e9310a80a0d9ef22ca6dd554",
+    "d1c61a8a4e0b305074fd3eee08aa504c3bf08fa7681102325e7f9a1254119469",
+    "115080cfc7fce7340c0e139b2b9080a8ec5ce544149b9ef08bfb33f9122170de",
+    "06d007ead106a328dbbc0f1aea8a4ae7b3752b9915786093db8ce43d8929b8ea"
+  ],
+  "last_full_cycle_at": "2026-04-25T11:01:27.753359+00:00"
 }
