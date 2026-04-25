@@ -375,6 +375,7 @@ def _process_commands(client: TelegramClient, state: BotState, configured_chat_i
         text = str(message.get("text", "")).strip()
         if not text.startswith("/"):
             continue
+        logger.info("Command received: %r from chat %s", text[:60], chat_id)
         try:
             changed = _handle_command(client, text, chat_id)
             if changed:
