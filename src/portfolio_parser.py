@@ -30,6 +30,20 @@ def parse_tickers_from_text(text: str) -> list[str]:
     return unique
 
 
+def parse_single_ticker(text: str, command: str) -> str | None:
+    """Extract a single ticker from a command like '/addstock RELIANCE'.
+
+    Returns the normalised ticker string or None if nothing valid was found.
+    """
+    body = re.sub(rf"^/{re.escape(command)}(@\w+)?", "", text.strip(), flags=re.IGNORECASE).strip()
+    parts = re.split(r"[\s,;]+", body)
+    for part in parts:
+        token = _normalize_token(part)
+        if token:
+            return token
+    return None
+
+
 def format_ticker_for_yfinance(ticker: str) -> str:
     if ticker.endswith(".NS") or ticker.endswith(".BO"):
         return ticker

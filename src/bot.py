@@ -21,7 +21,8 @@ from src.formatter import render_fundamentals_table
 from src.fundamentals_fetcher import fetch_fundamentals
 from src.news_classifier import classify_headline, is_duplicate_title, title_fingerprint
 from src.news_fetcher import NewsItem, fetch_stock_news
-from src.portfolio_parser import comma_join, parse_tickers_from_text
+from src.portfolio_parser import comma_join, parse_single_ticker, parse_tickers_from_text
+from src.news_fetcher import TICKER_TO_COMPANY
 
 
 logger = logging.getLogger(__name__)
@@ -239,14 +240,132 @@ def _interval_lower_bound(
 
 
 
+HELP_TEXT = """\
+Stock News Bot — Commands
+
+/start          Show this welcome message
+/help           Show all commands
+/list           Show your current watchlist
+/addstock TICKER      Add one stock (e.g. /addstock ZOMATO)
+/removestock TICKER   Remove one stock (e.g. /removestock TCS)
+/updatestocks TICKER1, TICKER2, ...
+                Replace the entire watchlist at once
+
+Use NSE ticker symbols (e.g. RELIANCE, HDFCBANK, INFY).
+The bot checks for news every 5 minutes and sends updates
+only when new headlines are found for a stock.\
+"""
+
+
+def _portfolio_list_message(tickers: list[str]) -> str:
+    if not tickers:
+        return (
+            "Your watchlist is empty.\n"
+            "Add stocks with /addstock TICKER\n"
+            "or set a full list with /updatestocks TICKER1, TICKER2, ..."
+        )
+    lines = ["Currently tracking:\n"]
+    for i, t in enumerate(tickers, 1):
+        company = TICKER_TO_COMPANY.get(t.upper(), "")
+        label = f"{company} ({t})" if company else t
+        lines.append(f"  {i}. {label}")
+    lines.append(f"\n{len(tickers)} stock(s) total.")
+    lines.append("Use /addstock or /removestock to change the list.")
+    return "\n".join(lines)
+
+
+def _handle_command(
+    client: TelegramClient,
+    text: str,
+    chat_id: str,
+) -> bool:
+    """Dispatch a single command. Returns True if the portfolio was changed."""
+    cmd = text.split()[0].lower().lstrip("/").split("@")[0]
+
+    if cmd in ("start", "help"):
+        client.send_message(HELP_TEXT, chat_id=chat_id)
+        return False
+
+    if cmd == "list":
+        tickers = _portfolio()
+        client.send_message(_portfolio_list_message(tickers), chat_id=chat_id)
+        return False
+
+    if cmd == "addstock":
+        ticker = parse_single_ticker(text, "addstock")
+        if not ticker:
+            client.send_message(
+                "Please give a ticker symbol.\nExample: /addstock ZOMATO",
+                chat_id=chat_id,
+            )
+            return False
+        tickers = _portfolio()
+        if ticker in tickers:
+            client.send_message(
+                f"{ticker} is already in your watchlist.\n\n"
+                + _portfolio_list_message(tickers),
+                chat_id=chat_id,
+            )
+            return False
+        tickers.append(ticker)
+        _save_portfolio(tickers)
+        client.send_message(
+            f"Added {ticker}.\n\n" + _portfolio_list_message(tickers),
+            chat_id=chat_id,
+        )
+        return True
+
+    if cmd == "removestock":
+        ticker = parse_single_ticker(text, "removestock")
+        if not ticker:
+            client.send_message(
+                "Please give a ticker symbol.\nExample: /removestock TCS",
+                chat_id=chat_id,
+            )
+            return False
+        tickers = _portfolio()
+        if ticker not in tickers:
+            client.send_message(
+                f"{ticker} is not in your watchlist.\n\n"
+                + _portfolio_list_message(tickers),
+                chat_id=chat_id,
+            )
+            return False
+        tickers.remove(ticker)
+        _save_portfolio(tickers)
+        client.send_message(
+            f"Removed {ticker}.\n\n" + _portfolio_list_message(tickers),
+            chat_id=chat_id,
+        )
+        return True
+
+    if cmd == "updatestocks":
+        tickers = parse_tickers_from_text(text)
+        if not tickers:
+            client.send_message(
+                "Please list at least one ticker.\n"
+                "Example: /updatestocks RELIANCE, TCS, INFY",
+                chat_id=chat_id,
+            )
+            return False
+        _save_portfolio(tickers)
+        client.send_message(
+            "Watchlist replaced.\n\n" + _portfolio_list_message(tickers),
+            chat_id=chat_id,
+        )
+        return True
+
+    return False
+
+
 def _process_commands(client: TelegramClient, state: BotState, configured_chat_id: str) -> tuple[BotState, bool]:
     try:
         updates = client.get_updates(offset=state.telegram_offset + 1)
     except Exception:
         logger.exception("Failed to fetch Telegram updates")
         return state, False
-    updated_portfolio = False
 
+    updated_portfolio = False
     for update in updates:
         state.telegram_offset = max(state.telegram_offset, _to_int(update.get("update_id", 0)))
         message = update.get("message", {})
@@ -254,27 +373,14 @@ def _process_commands(client: TelegramClient, state: BotState, configured_chat_i
         if configured_chat_id and chat_id != configured_chat_id:
             continue
         text = str(message.get("text", "")).strip()
-        if not text.lower().startswith("/updatestocks"):
+        if not text.startswith("/"):
             continue
-        tickers = parse_tickers_from_text(text)
-        if not tickers:
-            try:
-                client.send_message(
-                    "Usage: /updatestocks RELIANCE, TCS, INFY",
-                    chat_id=chat_id,
-                )
-            except Exception:
-                logger.exception("Failed to send usage message to Telegram chat %s", chat_id)
-            continue
-        _save_portfolio(tickers)
-        updated_portfolio = True
         try:
-            client.send_message(
-                f"Portfolio updated. Tracking: {comma_join(tickers)}",
-                chat_id=chat_id,
-            )
+            changed = _handle_command(client, text, chat_id)
+            if changed:
+                updated_portfolio = True
         except Exception:
-            logger.exception("Failed to send portfolio confirmation to Telegram chat %s", chat_id)
+            logger.exception("Failed handling command %r from chat %s", text[:40], chat_id)
 
     return state, updated_portfolio
 
