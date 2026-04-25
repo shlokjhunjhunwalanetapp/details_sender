@@ -1,0 +1,7 @@
+beautifulsoup4
+feedparser
+matplotlib
+pandas
+pytest
+requests
+yfinance
