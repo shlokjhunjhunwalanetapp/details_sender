@@ -4,7 +4,7 @@ import hashlib
 import json
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +33,7 @@ class BudgetState:
     llm_requests_used: int
     telegram_offset: int
     sent_hashes: list[str]
+    last_full_cycle_at: str
 
 
 class TelegramClient:
@@ -105,12 +106,19 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
 def _load_budget(today: str) -> BudgetState:
     raw = _read_json(REQUEST_BUDGET_PATH)
     if raw.get("date") != today:
-        return BudgetState(date=today, llm_requests_used=0, telegram_offset=int(raw.get("telegram_offset", 0)), sent_hashes=[])
+        return BudgetState(
+            date=today,
+            llm_requests_used=0,
+            telegram_offset=int(raw.get("telegram_offset", 0)),
+            sent_hashes=[],
+            last_full_cycle_at=str(raw.get("last_full_cycle_at", "")),
+        )
     return BudgetState(
         date=today,
         llm_requests_used=int(raw.get("llm_requests_used", 0)),
         telegram_offset=int(raw.get("telegram_offset", 0)),
         sent_hashes=list(raw.get("sent_hashes", [])),
+        last_full_cycle_at=str(raw.get("last_full_cycle_at", "")),
     )
 
 
@@ -122,6 +130,7 @@ def _save_budget(state: BudgetState) -> None:
             "llm_requests_used": state.llm_requests_used,
             "telegram_offset": state.telegram_offset,
             "sent_hashes": state.sent_hashes[-500:],
+            "last_full_cycle_at": state.last_full_cycle_at,
         },
     )
 
@@ -148,8 +157,20 @@ def _is_market_hours(config: Config, now: datetime) -> bool:
 def _should_run_full_cycle(config: Config, now: datetime) -> bool:
     if _is_market_hours(config, now):
         return True
-    # Off-hours cadence should be every 15 minutes in GitHub-only scheduling mode.
-    return now.minute % 15 == 0
+    return False
+
+
+def _should_run_offhours_cycle(now: datetime, last_full_cycle_at: str) -> bool:
+    if not last_full_cycle_at:
+        return True
+    try:
+        last_run = datetime.fromisoformat(last_full_cycle_at)
+    except ValueError:
+        return True
+    if last_run.tzinfo is None:
+        last_run = last_run.replace(tzinfo=now.tzinfo)
+    # GitHub schedule can drift by a few minutes, so gate by elapsed time.
+    return (now - last_run) >= timedelta(minutes=15)
 
 
 def _news_hash(item: NewsItem) -> str:
@@ -214,7 +235,7 @@ def run_bot_cycle(config: Config, commands_only: bool = False, force_verify: boo
     if commands_only:
         _save_budget(budget)
         return
-    if not _should_run_full_cycle(config, now):
+    if not force_verify and not _should_run_full_cycle(config, now) and not _should_run_offhours_cycle(now, budget.last_full_cycle_at):
         logger.info("Skipping full cycle this run (off-hours non-15-minute tick)")
         _save_budget(budget)
         return
@@ -275,4 +296,5 @@ def run_bot_cycle(config: Config, commands_only: bool = False, force_verify: boo
         if chart_path:
             client.send_photo(chart_path, caption=f"{stock_data.ticker} price chart (3M)")
 
+    budget.last_full_cycle_at = now.isoformat()
     _save_budget(budget)

@@ -2,5 +2,6 @@
   "date": "2026-04-25",
   "llm_requests_used": 0,
   "telegram_offset": 48581573,
-  "sent_hashes": []
+  "sent_hashes": [],
+  "last_full_cycle_at": ""
 }
