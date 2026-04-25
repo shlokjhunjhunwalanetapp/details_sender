@@ -310,14 +310,14 @@ async function handleCommand(text, chatId, env) {
   if (cmd === "addstock") {
     const ticker = parseSingleTicker(text, "addstock");
     if (!ticker) {
-      // Show a search button — tapping it opens inline search in this chat.
+      // Show search button (one at a time) AND a hint for bulk add.
       await sendMessageWithKeyboard(
         chatId,
-        "Tap the button below and type the stock name or symbol to search:",
+        "How would you like to add stocks?\n\n• Tap 🔍 to search and add one stock\n• Use /updatestocks RELIANCE, TCS, HAL to add multiple at once",
         {
-          inline_keyboard: [[
-            { text: "🔍 Search & add stock", switch_inline_query_current_chat: "" },
-          ]],
+          inline_keyboard: [
+            [{ text: "🔍 Search & add a stock", switch_inline_query_current_chat: "" }],
+          ],
         },
         env,
       );
@@ -325,16 +325,22 @@ async function handleCommand(text, chatId, env) {
     }
     const tickers = await getPortfolio(env);
     if (tickers.includes(ticker)) {
-      await sendMessage(
+      await sendMessageWithKeyboard(
         chatId,
         `${ticker} is already in your watchlist.\n\n${await formatPortfolio(tickers, env)}`,
+        { inline_keyboard: [[{ text: "🔍 Add another stock", switch_inline_query_current_chat: "" }]] },
         env,
       );
       return;
     }
     tickers.push(ticker);
     await savePortfolio(tickers, env);
-    await sendMessage(chatId, `Added ${ticker}.\n\n${await formatPortfolio(tickers, env)}`, env);
+    await sendMessageWithKeyboard(
+      chatId,
+      `Added ${ticker}.\n\n${await formatPortfolio(tickers, env)}`,
+      { inline_keyboard: [[{ text: "🔍 Add another stock", switch_inline_query_current_chat: "" }]] },
+      env,
+    );
     return;
   }
 
@@ -387,7 +393,7 @@ async function handleCommand(text, chatId, env) {
     if (!tickers.length) {
       await sendMessage(
         chatId,
-        "Please list at least one ticker.\nExample: /updatestocks RELIANCE, TCS, INFY",
+        "Replace your entire watchlist with new stocks.\n\nType the command followed by comma-separated symbols:\n\n/updatestocks RELIANCE, TCS, INFY, HAL, ZOMATO\n\nThis replaces everything in your current watchlist.",
         env,
       );
       return;
