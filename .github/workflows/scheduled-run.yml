@@ -8,6 +8,7 @@ on:
 jobs:
   run-bot:
     runs-on: ubuntu-latest
+    environment: TELEGRAM_BOT_TOKEN
     permissions:
       contents: write
     steps:
