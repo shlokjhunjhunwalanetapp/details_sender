@@ -4,7 +4,7 @@ compatibility_date = "2024-09-23"
 
 # Non-secret vars — change GITHUB_REPO to your actual repo
 [vars]
-GITHUB_REPO = "shlokjhunjhunwalanetapp/all_stock_details_sender"
+GITHUB_REPO = "shlokjhunjhunwalanetapp/details_sender"
 
 [[kv_namespaces]]
 binding = "PENDING_WATCHLIST"

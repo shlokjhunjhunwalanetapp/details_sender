@@ -9,7 +9,7 @@
  *   TELEGRAM_CHAT_ID        — your personal/group chat ID
  *   TELEGRAM_SECRET_TOKEN   — random string you generate (used to verify Telegram)
  *   GITHUB_TOKEN            — fine-grained PAT with Contents:write on this repo
- *   GITHUB_REPO             — e.g. "username/all_stock_details_sender"
+ *   GITHUB_REPO             — e.g. "username/details_sender"
  */
 
 // ── Ticker → company name registry ───────────────────────────────────────────
@@ -133,8 +133,6 @@ const TICKER_FALLBACK = {
   BDL: "Bharat Dynamics",
   BEML: "BEML",
   TATAMOTORS: "Tata Motors",
-  ZOMATO: "Zomato",
-  NYKAA: "Nykaa",
   DELHIVERY: "Delhivery",
 };
 
