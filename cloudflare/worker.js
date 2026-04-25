@@ -19,18 +19,30 @@ let _registry = null;
 
 async function getRegistry(env) {
   if (_registry) return _registry;
-  // Ticker names don't change frequently — raw URL (with caching) is fine here.
+  // Use the authenticated GitHub Contents API — raw.githubusercontent.com
+  // returns 404 for private repos without auth.
   try {
     const resp = await fetch(
-      `https://raw.githubusercontent.com/${env.GITHUB_REPO}/main/data/ticker_names.json`,
-      { headers: { "User-Agent": "StockNewsBot/1.0" }, cf: { cacheTtl: 3600 } },
+      `https://api.github.com/repos/${env.GITHUB_REPO}/contents/data/ticker_names.json`,
+      {
+        headers: {
+          Authorization: `token ${env.GITHUB_TOKEN}`,
+          Accept: "application/vnd.github.v3+json",
+          "User-Agent": "StockNewsBot/1.0",
+        },
+      },
     );
     if (resp.ok) {
-      const data = await resp.json();
+      const file = await resp.json();
+      const decoded = atob(file.content.replace(/\n/g, ""));
+      const data = JSON.parse(decoded);
       _registry = data.tickers || {};
       return _registry;
     }
-  } catch {}
+  } catch (e) {
+    console.error("getRegistry failed:", e);
+  }
+  // Last resort: use the small hardcoded fallback.
   _registry = TICKER_FALLBACK;
   return _registry;
 }
