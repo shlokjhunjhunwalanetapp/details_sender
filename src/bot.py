@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import tempfile
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -62,16 +63,44 @@ class BotState:
 
 
 class TelegramClient:
+    # Minimum gap between any two sends to the same chat (Telegram allows 1/s).
+    _SEND_INTERVAL = 1.1
+
     def __init__(self, token: str, chat_id: str = "") -> None:
         self.base_url = f"https://api.telegram.org/bot{token}"
         self.chat_id = chat_id
         self.session = _build_retry_session()
+        self._last_send_at: float = 0.0
+
+    def _throttle(self) -> None:
+        """Block until at least _SEND_INTERVAL seconds have passed since the last send."""
+        elapsed = time.monotonic() - self._last_send_at
+        if elapsed < self._SEND_INTERVAL:
+            time.sleep(self._SEND_INTERVAL - elapsed)
+        self._last_send_at = time.monotonic()
 
     @staticmethod
     def _raise_for_telegram_api(payload: dict[str, Any]) -> None:
         if not payload.get("ok", False):
             description = payload.get("description", "Unknown Telegram API error")
             raise RuntimeError(description)
+
+    def _post_with_rate_limit(self, url: str, max_retries: int = 3, **kwargs: Any) -> Any:
+        """POST to Telegram, automatically sleeping on 429 retry_after responses."""
+        for attempt in range(max_retries):
+            self._throttle()
+            response = self.session.post(url, **kwargs)
+            if response.status_code == 429:
+                body = response.json()
+                retry_after = int(body.get("parameters", {}).get("retry_after", 5))
+                logger.warning("Telegram 429: sleeping %ds (attempt %d/%d)", retry_after, attempt + 1, max_retries)
+                time.sleep(retry_after)
+                continue
+            response.raise_for_status()
+            payload = response.json()
+            self._raise_for_telegram_api(payload)
+            return payload
+        raise RuntimeError("Telegram rate limit retries exhausted")
 
     def get_updates(self, offset: int) -> list[dict[str, Any]]:
         response = self.session.get(
@@ -88,27 +117,23 @@ class TelegramClient:
         target = chat_id or self.chat_id
         if not target:
             return
-        response = self.session.post(
+        self._post_with_rate_limit(
             f"{self.base_url}/sendMessage",
             json={"chat_id": target, "text": text, "disable_web_page_preview": True},
             timeout=25,
         )
-        response.raise_for_status()
-        self._raise_for_telegram_api(response.json())
 
     def send_photo(self, photo_path: Path, caption: str = "", chat_id: str | None = None) -> None:
         target = chat_id or self.chat_id
         if not target:
             return
         with photo_path.open("rb") as f:
-            response = self.session.post(
+            self._post_with_rate_limit(
                 f"{self.base_url}/sendPhoto",
                 data={"chat_id": target, "caption": caption},
                 files={"photo": f},
                 timeout=45,
             )
-        response.raise_for_status()
-        self._raise_for_telegram_api(response.json())
 
 
 def _ensure_files() -> None:
