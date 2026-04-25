@@ -25,13 +25,8 @@ REGISTRY_PATH = Path("data/ticker_names.json")
 REQUEST_TIMEOUT = 20
 USER_AGENT = "Mozilla/5.0 (compatible; StockNewsBot/1.0)"
 
-# NSE index CSVs — combined gives ~1000 unique stocks covering most of the market.
-NSE_INDEX_URLS = [
-    "https://archives.nseindia.com/content/indices/ind_nifty500list.csv",
-    "https://archives.nseindia.com/content/indices/ind_niftynext50list.csv",
-    "https://archives.nseindia.com/content/indices/ind_niftymidcap150list.csv",
-    "https://archives.nseindia.com/content/indices/ind_niftysmallcap250list.csv",
-]
+# NSE complete equity listing — all ~2100+ EQ-series stocks on the main board.
+NSE_EQUITY_URL = "https://archives.nseindia.com/content/equities/EQUITY_L.csv"
 
 # Supplemental overrides for popular tickers not yet in any index CSV
 # or where the CSV name is less recognizable than the brand name.
@@ -76,28 +71,34 @@ def _clean(name: str) -> str:
 
 
 def refresh_registry() -> dict[str, str]:
-    """Fetch all NSE index CSVs and merge into a single registry saved to disk."""
-    mapping: dict[str, str] = {}
-    for url in NSE_INDEX_URLS:
-        try:
-            resp = requests.get(url, timeout=REQUEST_TIMEOUT, headers={"User-Agent": USER_AGENT})
-            resp.raise_for_status()
-            if "Symbol" not in resp.text[:300]:
-                logger.warning("Unexpected response from %s", url)
-                continue
-            reader = csv.DictReader(io.StringIO(resp.text))
-            added = 0
-            for row in reader:
-                symbol = row.get("Symbol", "").strip()
-                company = _clean(row.get("Company Name", "").strip())
-                if symbol and company and symbol not in mapping:
-                    mapping[symbol] = company
-                    added += 1
-            logger.info("Loaded %d tickers from %s", added, url)
-        except Exception:
-            logger.exception("Failed to fetch %s", url)
+    """Fetch the complete NSE equity listing and save to disk.
 
-    # Merge supplemental overrides (brand names / recent IPOs).
+    Uses the full EQUITY_L.csv (~2100+ EQ-series stocks) which covers every
+    company listed on the NSE main board, from Nifty 50 to micro-caps.
+    """
+    mapping: dict[str, str] = {}
+    try:
+        resp = requests.get(
+            NSE_EQUITY_URL,
+            timeout=REQUEST_TIMEOUT,
+            headers={"User-Agent": USER_AGENT},
+        )
+        resp.raise_for_status()
+        reader = csv.DictReader(io.StringIO(resp.text))
+        for row in reader:
+            # Only include EQ (main equity) series — exclude SME, debt, etc.
+            series = row.get(" SERIES", row.get("SERIES", "")).strip()
+            if series != "EQ":
+                continue
+            symbol = row.get("SYMBOL", "").strip()
+            company = _clean(row.get("NAME OF COMPANY", "").strip())
+            if symbol and company:
+                mapping[symbol] = company
+        logger.info("Loaded %d EQ tickers from NSE equity list.", len(mapping))
+    except Exception:
+        logger.exception("Failed to fetch NSE equity listing.")
+
+    # Supplemental overrides: brand names / very recent IPOs not yet in the file.
     for symbol, name in SUPPLEMENTAL.items():
         mapping.setdefault(symbol, name)
 
@@ -107,7 +108,7 @@ def refresh_registry() -> dict[str, str]:
             json.dumps({"tickers": mapping}, indent=2, ensure_ascii=False) + "\n",
             encoding="utf-8",
         )
-        logger.info("Ticker registry refreshed: %d companies saved.", len(mapping))
+        logger.info("Ticker registry saved: %d companies total.", len(mapping))
     return mapping
 
 
