@@ -351,10 +351,11 @@ def run_bot_cycle(config: Config, commands_only: bool = False, force_verify: boo
     for stock_data in fundamentals:
         try:
             news_for_ticker = by_ticker.get(stock_data.ticker, [])
-            news_lines = [f"- {n.verdict}:{n.authenticity_score} {n.title}" for n in news_for_ticker[:3]]
-            if not news_lines:
-                news_lines = ["- No new headlines in this cycle"]
+            if not news_for_ticker:
+                logger.info("Skipping %s: no new headlines this cycle", stock_data.ticker)
+                continue
 
+            news_lines = [f"- {n.verdict}:{n.authenticity_score} {n.title}" for n in news_for_ticker[:3]]
             payload = (
                 f"{render_fundamentals_table(stock_data)}\n\n"
                 f"News\n" + "\n".join(news_lines) + "\n\n"
