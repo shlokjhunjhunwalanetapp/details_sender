@@ -150,6 +150,27 @@ async function sendMessage(chatId, text, env) {
   });
 }
 
+async function sendMessageWithKeyboard(chatId, text, keyboard, env) {
+  await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      chat_id: chatId,
+      text,
+      disable_web_page_preview: true,
+      reply_markup: keyboard,
+    }),
+  });
+}
+
+async function answerCallbackQuery(callbackQueryId, text, env) {
+  await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/answerCallbackQuery`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ callback_query_id: callbackQueryId, text }),
+  });
+}
+
 
 // ── GitHub portfolio read / write ─────────────────────────────────────────────
 async function getPortfolio(env) {
@@ -289,7 +310,17 @@ async function handleCommand(text, chatId, env) {
   if (cmd === "addstock") {
     const ticker = parseSingleTicker(text, "addstock");
     if (!ticker) {
-      await sendMessage(chatId, "Please give a ticker symbol.\nExample: /addstock ZOMATO", env);
+      // Show a search button — tapping it opens inline search in this chat.
+      await sendMessageWithKeyboard(
+        chatId,
+        "Tap the button below and type the stock name or symbol to search:",
+        {
+          inline_keyboard: [[
+            { text: "🔍 Search & add stock", switch_inline_query_current_chat: "" },
+          ]],
+        },
+        env,
+      );
       return;
     }
     const tickers = await getPortfolio(env);
@@ -310,7 +341,29 @@ async function handleCommand(text, chatId, env) {
   if (cmd === "removestock") {
     const ticker = parseSingleTicker(text, "removestock");
     if (!ticker) {
-      await sendMessage(chatId, "Please give a ticker symbol.\nExample: /removestock TCS", env);
+      // Show current watchlist as tappable buttons for one-tap removal.
+      const tickers = await getPortfolio(env);
+      if (!tickers.length) {
+        await sendMessage(chatId, "Your watchlist is empty. Nothing to remove.", env);
+        return;
+      }
+      const registry = await getRegistry(env);
+      const rows = [];
+      for (let i = 0; i < tickers.length; i += 2) {
+        const row = [];
+        for (const t of tickers.slice(i, i + 2)) {
+          const name = registry[t] || t;
+          const label = name !== t ? `❌ ${t} (${name})` : `❌ ${t}`;
+          row.push({ text: label, callback_data: `/removestock ${t}` });
+        }
+        rows.push(row);
+      }
+      await sendMessageWithKeyboard(
+        chatId,
+        "Tap a stock to remove it from your watchlist:",
+        { inline_keyboard: rows },
+        env,
+      );
       return;
     }
     const tickers = await getPortfolio(env);
@@ -342,6 +395,21 @@ async function handleCommand(text, chatId, env) {
     await savePortfolio(tickers, env);
     await sendMessage(chatId, `Watchlist replaced.\n\n${await formatPortfolio(tickers, env)}`, env);
     return;
+  }
+}
+
+
+// ── Callback query handler (inline keyboard button taps) ──────────────────────
+async function handleCallbackQuery(callbackQuery, env) {
+  const chatId = String(callbackQuery.message.chat.id);
+  const data = callbackQuery.data || "";
+
+  // Acknowledge the tap immediately so the button stops spinning.
+  await answerCallbackQuery(callbackQuery.id, "", env);
+
+  // Route to the same command handler.
+  if (data.startsWith("/")) {
+    await handleCommand(data, chatId, env);
   }
 }
 
@@ -441,6 +509,16 @@ export default {
       // ── Inline query (stock name autocomplete) ───────────────────────────
       if (body.inline_query) {
         ctx.waitUntil(handleInlineQuery(body.inline_query, env));
+        return new Response("OK");
+      }
+
+      // ── Callback query (inline keyboard button tap) ──────────────────────
+      if (body.callback_query) {
+        const cq = body.callback_query;
+        const chatId = String(cq.message?.chat?.id || "");
+        if (!env.TELEGRAM_CHAT_ID || chatId === env.TELEGRAM_CHAT_ID) {
+          ctx.waitUntil(handleCallbackQuery(cq, env));
+        }
         return new Response("OK");
       }
 
