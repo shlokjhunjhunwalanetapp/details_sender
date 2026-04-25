@@ -36,36 +36,13 @@ python -m src.main
 
 ## GitHub Actions scheduling model
 
-GitHub Actions cannot natively run every minute. This project supports:
+GitHub Actions cannot natively run every minute. This project uses GitHub-only scheduling:
 
 - `.github/workflows/scheduled-run.yml`
-  - `repository_dispatch` type `market_tick` (for external 1-minute trigger during market hours)
-  - `repository_dispatch` type `offhour_tick` (for external 15-minute trigger off-hours)
-  - built-in fallback `schedule` every 15 minutes
+  - runs every 5 minutes
+  - bot logic sends full updates every 5 minutes during market hours and every 15 minutes during off-hours
 - `.github/workflows/telegram-webhook.yml`
-  - syncs `/updatestocks` command state every 5 minutes and on dispatch
-
-## External 1-minute trigger (free)
-
-Use a free external cron provider that can send an HTTP POST to:
-
-- `https://api.github.com/repos/<owner>/<repo>/dispatches`
-
-Body:
-
-```json
-{"event_type":"market_tick"}
-```
-
-Headers:
-- `Authorization: Bearer <github_pat_with_repo_scope>`
-- `Accept: application/vnd.github+json`
-
-Create another cron for off-hours with:
-
-```json
-{"event_type":"offhour_tick"}
-```
+  - syncs `/updatestocks` command state every 5 minutes
 
 ## Notes on request cap
 

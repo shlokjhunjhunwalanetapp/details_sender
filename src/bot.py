@@ -145,6 +145,13 @@ def _is_market_hours(config: Config, now: datetime) -> bool:
     return config.market_open <= current_time <= config.market_close
 
 
+def _should_run_full_cycle(config: Config, now: datetime) -> bool:
+    if _is_market_hours(config, now):
+        return True
+    # Off-hours cadence should be every 15 minutes in GitHub-only scheduling mode.
+    return now.minute % 15 == 0
+
+
 def _news_hash(item: NewsItem) -> str:
     base = f"{item.ticker}|{item.title}|{item.source}"
     return hashlib.sha256(base.encode("utf-8")).hexdigest()
@@ -205,6 +212,10 @@ def run_bot_cycle(config: Config, commands_only: bool = False, force_verify: boo
 
     budget, _ = _process_commands(client=client, budget=budget, configured_chat_id=config.telegram_chat_id)
     if commands_only:
+        _save_budget(budget)
+        return
+    if not _should_run_full_cycle(config, now):
+        logger.info("Skipping full cycle this run (off-hours non-15-minute tick)")
         _save_budget(budget)
         return
 

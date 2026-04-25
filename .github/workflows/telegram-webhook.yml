@@ -2,8 +2,6 @@ name: Telegram Command Sync
 
 on:
   workflow_dispatch:
-  repository_dispatch:
-    types: [command_tick]
   schedule:
     - cron: "*/5 * * * *"
 

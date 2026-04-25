@@ -2,10 +2,8 @@ name: Scheduled Stock Run
 
 on:
   workflow_dispatch:
-  repository_dispatch:
-    types: [market_tick, offhour_tick]
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "*/5 * * * *"
 
 jobs:
   run-bot:
