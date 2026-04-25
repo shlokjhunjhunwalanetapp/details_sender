@@ -14,7 +14,7 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from src.charting import create_price_chart
+from src.charting import create_price_charts
 from src.config import Config
 from src.formatter import render_fundamentals_table
 from src.fundamentals_fetcher import fetch_fundamentals
@@ -363,9 +363,9 @@ def run_bot_cycle(config: Config, commands_only: bool = False, force_verify: boo
             )
             client.send_message(payload)
 
-            chart_path = create_price_chart(stock_data.ticker, CHART_DIR)
-            if chart_path:
-                client.send_photo(chart_path, caption=f"{stock_data.ticker} price chart (3M)")
+            charts = create_price_charts(stock_data.ticker, CHART_DIR)
+            for label, chart_path in charts:
+                client.send_photo(chart_path, caption=f"{stock_data.ticker} price chart ({label})")
         except Exception:
             logger.exception("Failed sending update for %s", stock_data.ticker)
 
