@@ -65,9 +65,16 @@ TRUSTED_SOURCES: frozenset[str] = frozenset(
 def _search_term(ticker: str) -> str:
     """Return the best search term for a ticker.
 
-    Uses the live registry (Nifty 500 + yfinance fallback).
+    Uses the live registry (full NSE equity list + yfinance fallback).
+    If no company name is found (unknown ticker), appends 'NSE India'
+    to narrow the Google News query and reduce false positives.
     """
-    return lookup_company_name(ticker)
+    name = lookup_company_name(ticker)
+    if name == ticker:
+        # Company name not found — make query more specific to avoid
+        # matching unrelated international tickers with the same symbol.
+        return f"{ticker} NSE India"
+    return name
 
 
 def _to_iso8601(raw_value: str | None) -> str | None:

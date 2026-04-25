@@ -249,6 +249,41 @@ async function savePortfolio(tickers, env) {
 }
 
 
+// ── Ticker validation ─────────────────────────────────────────────────────────
+async function validateAndSuggest(ticker, env) {
+  const registry = await getRegistry(env);
+
+  // Exact match — fully valid NSE ticker.
+  if (registry[ticker]) {
+    return { valid: true, name: registry[ticker], suggestions: [] };
+  }
+
+  // Not found — find close matches to suggest.
+  const suggestions = [];
+  const t = ticker.toUpperCase();
+
+  // 1. Symbol starts with the query (prefix match).
+  for (const [sym, name] of Object.entries(registry)) {
+    if (sym.startsWith(t) && sym !== t) {
+      suggestions.push({ sym, name });
+      if (suggestions.length >= 3) break;
+    }
+  }
+
+  // 2. Company name contains the query.
+  if (suggestions.length < 3) {
+    for (const [sym, name] of Object.entries(registry)) {
+      if (name.toUpperCase().includes(t) && !suggestions.find(s => s.sym === sym)) {
+        suggestions.push({ sym, name });
+        if (suggestions.length >= 3) break;
+      }
+    }
+  }
+
+  return { valid: false, name: null, suggestions };
+}
+
+
 // ── Ticker parsing helpers ────────────────────────────────────────────────────
 function normalizeTicker(t) {
   return t.trim().toUpperCase().replace(/[^A-Z0-9.\-&]/g, "");
@@ -323,11 +358,34 @@ async function handleCommand(text, chatId, env) {
       );
       return;
     }
+    // Validate ticker against NSE registry before adding.
+    const check = await validateAndSuggest(ticker, env);
+    if (!check.valid) {
+      let msg = `⚠️ "${ticker}" is not a recognised NSE ticker and may produce no results.\n`;
+      if (check.suggestions.length) {
+        msg += "\nDid you mean:\n";
+        msg += check.suggestions.map(s => `  • ${s.sym} — ${s.name}`).join("\n");
+        msg += "\n\nOr use 🔍 to search by company name.";
+      } else {
+        msg += "\nUse 🔍 to search by company name instead.";
+      }
+      const keyboard = { inline_keyboard: [] };
+      // Add quick-tap buttons for suggestions.
+      if (check.suggestions.length) {
+        keyboard.inline_keyboard.push(
+          check.suggestions.map(s => ({ text: `${s.sym}`, callback_data: `/addstock ${s.sym}` }))
+        );
+      }
+      keyboard.inline_keyboard.push([{ text: "🔍 Search by name", switch_inline_query_current_chat: "" }]);
+      await sendMessageWithKeyboard(chatId, msg, keyboard, env);
+      return;
+    }
+
     const tickers = await getPortfolio(env);
     if (tickers.includes(ticker)) {
       await sendMessageWithKeyboard(
         chatId,
-        `${ticker} is already in your watchlist.\n\n${await formatPortfolio(tickers, env)}`,
+        `${ticker} (${check.name}) is already in your watchlist.\n\n${await formatPortfolio(tickers, env)}`,
         { inline_keyboard: [[{ text: "🔍 Add another stock", switch_inline_query_current_chat: "" }]] },
         env,
       );
@@ -337,7 +395,7 @@ async function handleCommand(text, chatId, env) {
     await savePortfolio(tickers, env);
     await sendMessageWithKeyboard(
       chatId,
-      `Added ${ticker}.\n\n${await formatPortfolio(tickers, env)}`,
+      `✅ Added ${check.name} (${ticker}).\n\n${await formatPortfolio(tickers, env)}`,
       { inline_keyboard: [[{ text: "🔍 Add another stock", switch_inline_query_current_chat: "" }]] },
       env,
     );
@@ -419,6 +477,22 @@ async function handleCommand(text, chatId, env) {
   if (cmd === "pendingadd") {
     const ticker = parseSingleTicker(text, "pendingadd");
     if (!ticker) return;
+    const check = await validateAndSuggest(ticker, env);
+    if (!check.valid) {
+      let msg = `⚠️ "${ticker}" is not a recognised NSE ticker.\n`;
+      if (check.suggestions.length) {
+        msg += "\nDid you mean:\n" + check.suggestions.map(s => `  • ${s.sym} — ${s.name}`).join("\n");
+      }
+      const keyboard = { inline_keyboard: [] };
+      if (check.suggestions.length) {
+        keyboard.inline_keyboard.push(
+          check.suggestions.map(s => ({ text: s.sym, callback_data: `/pendingadd ${s.sym}` }))
+        );
+      }
+      keyboard.inline_keyboard.push([{ text: "🔍 Search again", switch_inline_query_current_chat: ">" }]);
+      await sendMessageWithKeyboard(chatId, msg, keyboard, env);
+      return;
+    }
     const raw = await env.PENDING_WATCHLIST.get(chatId);
     const pending = raw ? JSON.parse(raw) : [];
     if (!pending.includes(ticker)) pending.push(ticker);
