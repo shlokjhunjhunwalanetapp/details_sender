@@ -346,6 +346,82 @@ async function handleCommand(text, chatId, env) {
 }
 
 
+// ── Command menu (shown when user types "/") ──────────────────────────────────
+const BOT_COMMANDS = [
+  { command: "start",        description: "Welcome message and all commands" },
+  { command: "help",         description: "Show all commands" },
+  { command: "list",         description: "Show your current watchlist" },
+  { command: "addstock",     description: "Add a stock  — e.g. /addstock RELIANCE" },
+  { command: "removestock",  description: "Remove a stock — e.g. /removestock TCS" },
+  { command: "updatestocks", description: "Replace entire watchlist — e.g. /updatestocks RELIANCE, TCS" },
+];
+
+async function registerCommands(env) {
+  await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/setMyCommands`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ commands: BOT_COMMANDS }),
+  });
+}
+
+
+// ── Inline mode — stock name autocomplete ─────────────────────────────────────
+// Enable in BotFather: /setinline → @yourbot → set placeholder text.
+// User types: @yourbot RELI   → sees matching stocks → taps to send /addstock
+async function handleInlineQuery(query, env) {
+  const q = query.query.trim().toUpperCase();
+  const registry = await getRegistry(env);
+
+  let matches = [];
+  if (q.length === 0) {
+    // No query yet — show current watchlist stocks as quick suggestions.
+    const tickers = await getPortfolio(env);
+    matches = tickers.slice(0, 10).map((sym, i) => {
+      const name = registry[sym] || sym;
+      return makeInlineResult(i, sym, name, "Already in watchlist — tap to remove", `/removestock ${sym}`);
+    });
+  } else {
+    // Search: symbol prefix match first, then company name substring match.
+    const prefixMatches = [];
+    const nameMatches = [];
+    for (const [sym, name] of Object.entries(registry)) {
+      if (sym.startsWith(q)) {
+        prefixMatches.push([sym, name]);
+      } else if (name.toUpperCase().includes(q)) {
+        nameMatches.push([sym, name]);
+      }
+      if (prefixMatches.length + nameMatches.length >= 50) break;
+    }
+    const combined = [...prefixMatches, ...nameMatches].slice(0, 50);
+    matches = combined.map(([sym, name], i) =>
+      makeInlineResult(i, sym, name, `Tap to add ${sym} to watchlist`, `/addstock ${sym}`)
+    );
+  }
+
+  await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/answerInlineQuery`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      inline_query_id: query.id,
+      results: matches,
+      cache_time: 10,
+      is_personal: true,
+    }),
+  });
+}
+
+function makeInlineResult(index, sym, name, description, messageText) {
+  return {
+    type: "article",
+    id: `${index}_${sym}`,
+    title: `${sym}  —  ${name}`,
+    description,
+    input_message_content: { message_text: messageText },
+    thumb_url: "https://upload.wikimedia.org/wikipedia/commons/thumb/5/52/BSE_on_Dalal_Street.JPG/120px-BSE_on_Dalal_Street.JPG",
+  };
+}
+
+
 // ── Worker entry point ────────────────────────────────────────────────────────
 export default {
   async fetch(request, env, ctx) {
@@ -361,6 +437,14 @@ export default {
 
     try {
       const body = await request.json();
+
+      // ── Inline query (stock name autocomplete) ───────────────────────────
+      if (body.inline_query) {
+        ctx.waitUntil(handleInlineQuery(body.inline_query, env));
+        return new Response("OK");
+      }
+
+      // ── Regular chat message ─────────────────────────────────────────────
       const message = body.message;
       if (!message?.text) return new Response("OK");
 
@@ -373,7 +457,6 @@ export default {
       }
 
       if (text.startsWith("/")) {
-        // Use waitUntil so the command runs even after we return 200 to Telegram.
         ctx.waitUntil(handleCommand(text, chatId, env));
       }
     } catch (err) {
