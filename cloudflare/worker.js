@@ -12,8 +12,35 @@
  *   GITHUB_REPO             — e.g. "username/all_stock_details_sender"
  */
 
-// ── Ticker → company name mapping (mirrors src/news_fetcher.py) ──────────────
-const TICKER_TO_COMPANY = {
+// ── Ticker → company name registry ───────────────────────────────────────────
+// Loaded at runtime from data/ticker_names.json in the GitHub repo.
+// Falls back to the hardcoded map below if the fetch fails.
+let _registry = null;
+
+async function getRegistry(env) {
+  if (_registry) return _registry;
+  try {
+    const resp = await fetch(
+      `https://raw.githubusercontent.com/${env.GITHUB_REPO}/main/data/ticker_names.json`,
+      { headers: { "User-Agent": "StockNewsBot/1.0" } },
+    );
+    if (resp.ok) {
+      const data = await resp.json();
+      _registry = data.tickers || {};
+      return _registry;
+    }
+  } catch {}
+  _registry = TICKER_FALLBACK;
+  return _registry;
+}
+
+async function lookupCompany(ticker, env) {
+  const registry = await getRegistry(env);
+  return registry[ticker.toUpperCase()] || ticker;
+}
+
+// Fallback hardcoded map (used only if GitHub fetch fails)
+const TICKER_FALLBACK = {
   RELIANCE: "Reliance Industries",
   TCS: "Tata Consultancy Services",
   INFY: "Infosys",
@@ -92,6 +119,10 @@ const TICKER_TO_COMPANY = {
   GRSE: "Garden Reach Shipbuilders",
   BDL: "Bharat Dynamics",
   BEML: "BEML",
+  TATAMOTORS: "Tata Motors",
+  ZOMATO: "Zomato",
+  NYKAA: "Nykaa",
+  DELHIVERY: "Delhivery",
 };
 
 const HELP_TEXT = `Stock News Bot — Commands
@@ -206,7 +237,7 @@ function parseSingleTicker(text, command) {
   return parseTickersFromText(text, command)[0] ?? null;
 }
 
-function formatPortfolio(tickers) {
+async function formatPortfolio(tickers, env) {
   if (!tickers.length) {
     return (
       "Your watchlist is empty.\n" +
@@ -215,10 +246,11 @@ function formatPortfolio(tickers) {
     );
   }
   const lines = ["Currently tracking:\n"];
-  tickers.forEach((t, i) => {
-    const company = TICKER_TO_COMPANY[t] ?? "";
-    lines.push(`  ${i + 1}. ${company ? `${company} (${t})` : t}`);
-  });
+  for (let i = 0; i < tickers.length; i++) {
+    const t = tickers[i];
+    const company = await lookupCompany(t, env);
+    lines.push(`  ${i + 1}. ${company !== t ? `${company} (${t})` : t}`);
+  }
   lines.push(`\n${tickers.length} stock(s) total.`);
   lines.push("Use /addstock or /removestock to change the list.");
   return lines.join("\n");
@@ -236,7 +268,7 @@ async function handleCommand(text, chatId, env) {
 
   if (cmd === "list") {
     const tickers = await getPortfolio(env);
-    await sendMessage(chatId, formatPortfolio(tickers), env);
+    await sendMessage(chatId, await formatPortfolio(tickers, env), env);
     return;
   }
 
@@ -250,14 +282,14 @@ async function handleCommand(text, chatId, env) {
     if (tickers.includes(ticker)) {
       await sendMessage(
         chatId,
-        `${ticker} is already in your watchlist.\n\n${formatPortfolio(tickers)}`,
+        `${ticker} is already in your watchlist.\n\n${await formatPortfolio(tickers, env)}`,
         env,
       );
       return;
     }
     tickers.push(ticker);
     await savePortfolio(tickers, env);
-    await sendMessage(chatId, `Added ${ticker}.\n\n${formatPortfolio(tickers)}`, env);
+    await sendMessage(chatId, `Added ${ticker}.\n\n${await formatPortfolio(tickers, env)}`, env);
     return;
   }
 
@@ -272,14 +304,14 @@ async function handleCommand(text, chatId, env) {
     if (idx === -1) {
       await sendMessage(
         chatId,
-        `${ticker} is not in your watchlist.\n\n${formatPortfolio(tickers)}`,
+        `${ticker} is not in your watchlist.\n\n${await formatPortfolio(tickers, env)}`,
         env,
       );
       return;
     }
     tickers.splice(idx, 1);
     await savePortfolio(tickers, env);
-    await sendMessage(chatId, `Removed ${ticker}.\n\n${formatPortfolio(tickers)}`, env);
+    await sendMessage(chatId, `Removed ${ticker}.\n\n${await formatPortfolio(tickers, env)}`, env);
     return;
   }
 
@@ -294,7 +326,7 @@ async function handleCommand(text, chatId, env) {
       return;
     }
     await savePortfolio(tickers, env);
-    await sendMessage(chatId, `Watchlist replaced.\n\n${formatPortfolio(tickers)}`, env);
+    await sendMessage(chatId, `Watchlist replaced.\n\n${await formatPortfolio(tickers, env)}`, env);
     return;
   }
 }

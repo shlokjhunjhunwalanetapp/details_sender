@@ -8,6 +8,8 @@ from urllib.parse import quote_plus
 import feedparser
 import requests
 
+from src.ticker_registry import lookup_company_name
+
 REQUEST_TIMEOUT = 20
 USER_AGENT = "Mozilla/5.0 (compatible; StockNewsBot/1.0; +https://github.com)"
 
@@ -60,92 +62,12 @@ TRUSTED_SOURCES: frozenset[str] = frozenset(
     }
 )
 
-# Maps NSE/BSE ticker symbols to the company's full search name.
-# More specific queries = more relevant and timely results from Google News.
-TICKER_TO_COMPANY: dict[str, str] = {
-    "RELIANCE": "Reliance Industries",
-    "TCS": "Tata Consultancy Services",
-    "INFY": "Infosys",
-    "HDFCBANK": "HDFC Bank",
-    "ICICIBANK": "ICICI Bank",
-    "HINDUNILVR": "Hindustan Unilever",
-    "SBIN": "State Bank of India",
-    "BAJFINANCE": "Bajaj Finance",
-    "BHARTIARTL": "Bharti Airtel",
-    "KOTAKBANK": "Kotak Mahindra Bank",
-    "LT": "Larsen Toubro",
-    "AXISBANK": "Axis Bank",
-    "ASIANPAINT": "Asian Paints",
-    "MARUTI": "Maruti Suzuki",
-    "SUNPHARMA": "Sun Pharmaceutical",
-    "TITAN": "Titan Company",
-    "WIPRO": "Wipro",
-    "TECHM": "Tech Mahindra",
-    "HCLTECH": "HCL Technologies",
-    "ULTRACEMCO": "UltraTech Cement",
-    "NESTLEIND": "Nestle India",
-    "ADANIENT": "Adani Enterprises",
-    "ADANIPORTS": "Adani Ports",
-    "POWERGRID": "Power Grid Corporation",
-    "NTPC": "NTPC",
-    "ONGC": "ONGC",
-    "COALINDIA": "Coal India",
-    "BPCL": "BPCL",
-    "DIVISLAB": "Divi's Laboratories",
-    "DRREDDY": "Dr Reddy's Laboratories",
-    "CIPLA": "Cipla",
-    "GRASIM": "Grasim Industries",
-    "EICHERMOT": "Eicher Motors",
-    "BAJAJ-AUTO": "Bajaj Auto",
-    "HEROMOTOCO": "Hero MotoCorp",
-    "M&M": "Mahindra Mahindra",
-    "TATACONSUM": "Tata Consumer Products",
-    "BRITANNIA": "Britannia Industries",
-    "HINDALCO": "Hindalco Industries",
-    "TATASTEEL": "Tata Steel",
-    "JSWSTEEL": "JSW Steel",
-    "INDUSINDBK": "IndusInd Bank",
-    "SBILIFE": "SBI Life Insurance",
-    "HDFCLIFE": "HDFC Life Insurance",
-    "ICICIGI": "ICICI Lombard",
-    "ITC": "ITC",
-    "PIDILITIND": "Pidilite Industries",
-    "HAVELLS": "Havells India",
-    "SIEMENS": "Siemens India",
-    "ABB": "ABB India",
-    "IRCTC": "IRCTC",
-    "DMART": "Avenue Supermarts DMart",
-    "ZOMATO": "Zomato",
-    "NYKAA": "Nykaa FSN E-Commerce",
-    "PAYTM": "Paytm One97 Communications",
-    "POLICYBZR": "PB Fintech PolicyBazaar",
-    "MAPMYINDIA": "MapMyIndia CE Info Systems",
-    # Defence / PSU
-    "HAL": "Hindustan Aeronautics",
-    "BEL": "Bharat Electronics",
-    "BHEL": "Bharat Heavy Electricals",
-    "SAIL": "Steel Authority of India",
-    "NMDC": "NMDC",
-    "GAIL": "GAIL India",
-    "IOC": "Indian Oil Corporation",
-    "HPCL": "Hindustan Petroleum Corporation",
-    "RECLTD": "REC Limited",
-    "PFC": "Power Finance Corporation",
-    "IRFC": "Indian Railway Finance Corporation",
-    "CONCOR": "Container Corporation of India",
-    "NBCC": "NBCC India",
-    "NHPC": "NHPC",
-    "SJVN": "SJVN",
-    "COCHINSHIP": "Cochin Shipyard",
-    "MAZAGON": "Mazagon Dock Shipbuilders",
-    "GRSE": "Garden Reach Shipbuilders",
-    "BDL": "Bharat Dynamics",
-    "BEML": "BEML",
-}
-
-
 def _search_term(ticker: str) -> str:
-    return TICKER_TO_COMPANY.get(ticker.upper(), ticker)
+    """Return the best search term for a ticker.
+
+    Uses the live registry (Nifty 500 + yfinance fallback).
+    """
+    return lookup_company_name(ticker)
 
 
 def _to_iso8601(raw_value: str | None) -> str | None:

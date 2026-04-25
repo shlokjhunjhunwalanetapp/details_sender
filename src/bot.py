@@ -22,7 +22,7 @@ from src.fundamentals_fetcher import fetch_cash_flow, fetch_fundamentals, fetch_
 from src.news_classifier import classify_headline, is_duplicate_title, title_fingerprint
 from src.news_fetcher import NewsItem, fetch_stock_news
 from src.portfolio_parser import comma_join, parse_single_ticker, parse_tickers_from_text
-from src.news_fetcher import TICKER_TO_COMPANY
+from src.ticker_registry import lookup_company_name
 
 
 logger = logging.getLogger(__name__)
@@ -271,8 +271,8 @@ def _portfolio_list_message(tickers: list[str]) -> str:
         )
     lines = ["Currently tracking:\n"]
     for i, t in enumerate(tickers, 1):
-        company = TICKER_TO_COMPANY.get(t.upper(), "")
-        label = f"{company} ({t})" if company else t
+        company = lookup_company_name(t)
+        label = f"{company} ({t})" if company and company != t else t
         lines.append(f"  {i}. {label}")
     lines.append(f"\n{len(tickers)} stock(s) total.")
     lines.append("Use /addstock or /removestock to change the list.")

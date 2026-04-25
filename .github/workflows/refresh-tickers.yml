@@ -1,0 +1,42 @@
+name: Refresh Ticker Registry
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Every Sunday at 02:00 IST (20:30 UTC Saturday)
+    - cron: "30 20 * * 6"
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    environment: TELEGRAM_BOT_TOKEN
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Refresh Nifty 500 ticker registry
+        run: python3 -c "
+from src.ticker_registry import refresh_registry
+mapping = refresh_registry()
+print(f'Refreshed {len(mapping)} tickers.')
+"
+
+      - name: Commit updated registry
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/ticker_names.json
+          git diff --staged --quiet || git commit -m "chore: refresh Nifty 500 ticker registry"
+          git pull --rebase origin main
+          git push
