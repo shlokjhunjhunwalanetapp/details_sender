@@ -140,15 +140,27 @@ def _is_trusted(source: str) -> bool:
     return source.strip().lower() in TRUSTED_SOURCES
 
 
-def fetch_stock_news(ticker: str, max_items: int = 6, recent_hours: int = 24) -> list[NewsItem]:
+def fetch_stock_news(
+    ticker: str,
+    max_items: int = 6,
+    since: datetime | None = None,
+) -> list[NewsItem]:
     """Fetch news for a stock ticker.
 
-    Only items from trusted financial sources and published within
-    `recent_hours` are returned, sorted newest-first.
+    `since` is a timezone-aware UTC datetime; only articles published strictly
+    after this timestamp are returned.  If omitted, articles from the last 24
+    hours are returned.
+
+    Only items from trusted financial sources are included, sorted newest-first.
+    The timestamp check is the very first gate inside the feed loop.
     """
     company = _search_term(ticker)
     query = quote_plus(f'"{company}" stock')
     rss_url = f"https://news.google.com/rss/search?q={query}&hl=en-IN&gl=IN&ceid=IN:en"
+
+    # Default fallback: last 24 hours
+    if since is None:
+        since = datetime.now(timezone.utc) - timedelta(hours=24)
 
     try:
         response = requests.get(rss_url, timeout=REQUEST_TIMEOUT, headers={"User-Agent": USER_AGENT})
@@ -157,26 +169,28 @@ def fetch_stock_news(ticker: str, max_items: int = 6, recent_hours: int = 24) ->
         return []
 
     feed = feedparser.parse(response.text)
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=recent_hours)
 
     items: list[NewsItem] = []
     for entry in feed.entries:
+        # ── Gate 1: timestamp ────────────────────────────────────────────────
         published_at = _to_iso8601(getattr(entry, "published", None))
         if not published_at:
             continue
-
         try:
             pub_dt = datetime.fromisoformat(published_at)
         except ValueError:
             continue
-        if pub_dt < cutoff:
+        if pub_dt.tzinfo is None:
+            pub_dt = pub_dt.replace(tzinfo=timezone.utc)
+        if pub_dt <= since:
+            # Article is older than our window — skip immediately.
             continue
 
+        # ── Gate 2: source quality ───────────────────────────────────────────
         source = ""
         if getattr(entry, "source", None):
             source = entry.source.get("title", "")
         source = source.strip() or "Unknown"
-
         if not _is_trusted(source):
             continue
 
@@ -190,6 +204,6 @@ def fetch_stock_news(ticker: str, max_items: int = 6, recent_hours: int = 24) ->
             )
         )
 
-    # Newest first so the interval filter in bot.py always sees the freshest items.
+    # Newest first so the caller always sees the freshest headlines first.
     items.sort(key=lambda n: n.published_at, reverse=True)
     return items[:max_items]

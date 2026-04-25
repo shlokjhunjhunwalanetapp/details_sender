@@ -1,9 +1,8 @@
 from datetime import datetime, time, timezone
 from zoneinfo import ZoneInfo
 
-from src.bot import _is_market_hours, _interval_lower_bound, _published_after
+from src.bot import _is_market_hours, _interval_lower_bound, _relative_time
 from src.config import Config
-from src.news_fetcher import NewsItem
 
 
 def _config() -> Config:
@@ -41,23 +40,19 @@ def test_interval_lower_bound_falls_back_on_empty() -> None:
     assert lb == datetime(2026, 4, 26, 10, 0, tzinfo=timezone.utc)
 
 
-def _make_item(published_at: str) -> NewsItem:
-    return NewsItem(
-        ticker="TEST",
-        title="headline",
-        url="https://example.com",
-        source="Reuters",
-        published_at=published_at,
-    )
+def test_relative_time_minutes() -> None:
+    now_utc = datetime(2026, 4, 27, 10, 10, tzinfo=timezone.utc)
+    published = "2026-04-27T10:05:00+00:00"
+    assert _relative_time(published, now_utc) == "5m ago"
 
 
-def test_published_after_returns_true_for_newer_item() -> None:
-    lower = datetime(2026, 4, 27, 9, 55, tzinfo=timezone.utc)
-    item = _make_item("2026-04-27T10:00:00+00:00")
-    assert _published_after(item, lower) is True
+def test_relative_time_hours() -> None:
+    now_utc = datetime(2026, 4, 27, 12, 0, tzinfo=timezone.utc)
+    published = "2026-04-27T10:00:00+00:00"
+    assert _relative_time(published, now_utc) == "2h ago"
 
 
-def test_published_after_returns_false_for_older_item() -> None:
-    lower = datetime(2026, 4, 27, 9, 55, tzinfo=timezone.utc)
-    item = _make_item("2026-04-27T09:50:00+00:00")
-    assert _published_after(item, lower) is False
+def test_relative_time_just_now() -> None:
+    now_utc = datetime(2026, 4, 27, 10, 0, 30, tzinfo=timezone.utc)
+    published = "2026-04-27T10:00:00+00:00"
+    assert _relative_time(published, now_utc) == "just now"

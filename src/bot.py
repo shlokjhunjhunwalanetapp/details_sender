@@ -238,15 +238,6 @@ def _interval_lower_bound(
     return now_utc - timedelta(hours=fallback_hours)
 
 
-def _published_after(item: NewsItem, lower_bound_utc: datetime) -> bool:
-    try:
-        published = datetime.fromisoformat(item.published_at)
-    except ValueError:
-        return False
-    if published.tzinfo is None:
-        published = published.replace(tzinfo=timezone.utc)
-    return published.astimezone(timezone.utc) > lower_bound_utc
-
 
 def _process_commands(client: TelegramClient, state: BotState, configured_chat_id: str) -> tuple[BotState, bool]:
     try:
@@ -288,11 +279,31 @@ def _process_commands(client: TelegramClient, state: BotState, configured_chat_i
     return state, updated_portfolio
 
 
-def _format_headline(item: NewsItem) -> str:
+def _relative_time(published_at: str, now_utc: datetime) -> str:
+    """Return a human-readable age string like '4m ago' or '2h ago'."""
+    try:
+        pub = datetime.fromisoformat(published_at)
+        if pub.tzinfo is None:
+            pub = pub.replace(tzinfo=timezone.utc)
+        delta = now_utc - pub.astimezone(timezone.utc)
+        total_minutes = int(delta.total_seconds() / 60)
+        if total_minutes < 1:
+            return "just now"
+        if total_minutes < 60:
+            return f"{total_minutes}m ago"
+        hours = total_minutes // 60
+        return f"{hours}h ago"
+    except (ValueError, TypeError):
+        return ""
+
+
+def _format_headline(item: NewsItem, now_utc: datetime) -> str:
     source = item.source or "Unknown"
     label = classify_headline(item.title)
+    age = _relative_time(item.published_at, now_utc)
     prefix = f"{label} " if label else ""
-    return f"- {prefix}{source}: {item.title}"
+    age_tag = f" [{age}]" if age else ""
+    return f"- {prefix}{source}{age_tag}: {item.title}"
 
 
 def run_bot_cycle(config: Config, commands_only: bool = False) -> None:
@@ -327,33 +338,30 @@ def run_bot_cycle(config: Config, commands_only: bool = False) -> None:
         except Exception:
             logger.exception("Failed fetching fundamentals for %s", ticker)
 
+    # Fetch news using lower_bound_utc as the timestamp gate — articles older
+    # than the previous cycle are rejected inside fetch_stock_news itself.
     all_news: list[NewsItem] = []
     for ticker in tickers:
         try:
-            # Pull a wide net then filter by interval lower bound below.
             all_news.extend(
                 fetch_stock_news(
                     ticker=ticker,
                     max_items=config.max_news_per_stock,
-                    recent_hours=max(config.news_recent_hours, 24),
+                    since=lower_bound_utc,
                 )
             )
         except Exception:
             logger.exception("Failed fetching news for %s", ticker)
 
+    # Filter 2: exact hash dedup (cross-cycle, same source).
+    # Filter 3: title fingerprint near-dedup (within-cycle, per-ticker).
     sent_hashes_set = set(state.sent_hashes)
     by_ticker: dict[str, list[NewsItem]] = {ticker: [] for ticker in tickers}
-    # Per-ticker title fingerprints for within-cycle near-duplicate detection.
-    # Kept per-ticker to avoid false positives between different companies.
     ticker_fingerprints: dict[str, list[frozenset[str]]] = {t: [] for t in tickers}
     for item in all_news:
-        if not _published_after(item, lower_bound_utc):
-            continue
-        # Exact dedup — same article URL/title/source seen in any prior cycle.
         digest = _news_hash(item)
         if digest in sent_hashes_set:
             continue
-        # Near-duplicate dedup — same story from a different source this cycle.
         fp = title_fingerprint(item.title)
         ticker_fps = ticker_fingerprints.setdefault(item.ticker, [])
         if is_duplicate_title(fp, ticker_fps):
@@ -373,7 +381,7 @@ def run_bot_cycle(config: Config, commands_only: bool = False) -> None:
                 logger.info("Skipping %s: no new headlines this cycle", stock_data.ticker)
                 continue
 
-            news_lines = [_format_headline(n) for n in news_for_ticker[:config.max_news_per_stock]]
+            news_lines = [_format_headline(n, now_utc) for n in news_for_ticker[:config.max_news_per_stock]]
             payload = (
                 f"{render_fundamentals_table(stock_data)}\n\n"
                 f"News\n" + "\n".join(news_lines)
