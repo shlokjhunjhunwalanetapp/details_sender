@@ -1,9 +1,12 @@
 name: Telegram Command Sync
+# This workflow is DISABLED once the Cloudflare Worker webhook is set up.
+# The worker handles commands instantly without polling.
+# Re-enable by restoring the schedule trigger below if you remove the webhook.
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "2-59/5 * * * *"
+  # schedule:
+  #   - cron: "2-59/5 * * * *"
 
 jobs:
   sync-commands:
