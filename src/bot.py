@@ -17,8 +17,8 @@ from urllib3.util.retry import Retry
 
 from src.charting import create_price_charts
 from src.config import Config
-from src.formatter import render_fundamentals_table
-from src.fundamentals_fetcher import fetch_fundamentals
+from src.formatter import render_cash_flow, render_fundamentals_table, render_quarterly_results
+from src.fundamentals_fetcher import fetch_cash_flow, fetch_fundamentals, fetch_quarterly_results
 from src.news_classifier import classify_headline, is_duplicate_title, title_fingerprint
 from src.news_fetcher import NewsItem, fetch_stock_news
 from src.portfolio_parser import comma_join, parse_single_ticker, parse_tickers_from_text
@@ -487,6 +487,7 @@ def run_bot_cycle(config: Config, commands_only: bool = False) -> None:
                 logger.info("Skipping %s: no new headlines this cycle", stock_data.ticker)
                 continue
 
+            # 1. Fundamentals + news headlines
             news_lines = [_format_headline(n, now_utc) for n in news_for_ticker[:config.max_news_per_stock]]
             payload = (
                 f"{render_fundamentals_table(stock_data)}\n\n"
@@ -494,6 +495,21 @@ def run_bot_cycle(config: Config, commands_only: bool = False) -> None:
             )
             client.send_message(payload)
 
+            # 2. Quarterly results (last 6 quarters)
+            quarterly = fetch_quarterly_results(stock_data.ticker, last_quarters=6)
+            if quarterly:
+                q_text = render_quarterly_results(quarterly)
+                if q_text:
+                    client.send_message(q_text)
+
+            # 3. Cash flow (last 5 years)
+            cash_flow = fetch_cash_flow(stock_data.ticker, last_years=5)
+            if cash_flow:
+                cf_text = render_cash_flow(cash_flow)
+                if cf_text:
+                    client.send_message(cf_text)
+
+            # 4. Price charts (3M, 1Y, All-time)
             charts = create_price_charts(stock_data.ticker, CHART_DIR)
             for label, chart_path in charts:
                 client.send_photo(chart_path, caption=f"{stock_data.ticker} price chart ({label})")
