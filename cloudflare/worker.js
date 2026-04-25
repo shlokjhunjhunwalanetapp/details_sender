@@ -19,10 +19,11 @@ let _registry = null;
 
 async function getRegistry(env) {
   if (_registry) return _registry;
+  // Ticker names don't change frequently — raw URL (with caching) is fine here.
   try {
     const resp = await fetch(
       `https://raw.githubusercontent.com/${env.GITHUB_REPO}/main/data/ticker_names.json`,
-      { headers: { "User-Agent": "StockNewsBot/1.0" } },
+      { headers: { "User-Agent": "StockNewsBot/1.0" }, cf: { cacheTtl: 3600 } },
     );
     if (resp.ok) {
       const data = await resp.json();
@@ -152,13 +153,26 @@ async function sendMessage(chatId, text, env) {
 
 // ── GitHub portfolio read / write ─────────────────────────────────────────────
 async function getPortfolio(env) {
+  // Use the GitHub Contents API — NOT the raw CDN URL.
+  // raw.githubusercontent.com is cached for up to 5 minutes, which causes
+  // stale reads when commands fire within seconds of each other, silently
+  // dropping stocks that were just added.
   try {
     const resp = await fetch(
-      `https://raw.githubusercontent.com/${env.GITHUB_REPO}/main/data/portfolio.json`,
-      { headers: { "User-Agent": "StockNewsBot/1.0" } },
+      `https://api.github.com/repos/${env.GITHUB_REPO}/contents/data/portfolio.json`,
+      {
+        headers: {
+          Authorization: `token ${env.GITHUB_TOKEN}`,
+          Accept: "application/vnd.github.v3+json",
+          "User-Agent": "StockNewsBot/1.0",
+        },
+      },
     );
     if (!resp.ok) return [];
-    const data = await resp.json();
+    const file = await resp.json();
+    // Content is base64-encoded by the GitHub API.
+    const decoded = atob(file.content.replace(/\n/g, ""));
+    const data = JSON.parse(decoded);
     return data.tickers || [];
   } catch {
     return [];
@@ -334,7 +348,7 @@ async function handleCommand(text, chatId, env) {
 
 // ── Worker entry point ────────────────────────────────────────────────────────
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     if (request.method !== "POST") {
       return new Response("Stock News Bot — webhook endpoint is live.", { status: 200 });
     }
@@ -359,10 +373,8 @@ export default {
       }
 
       if (text.startsWith("/")) {
-        // Handle command in the background so Telegram doesn't time out.
-        env.ctx?.waitUntil(handleCommand(text, chatId, env));
-        // If no execution context (local dev), await directly.
-        if (!env.ctx) await handleCommand(text, chatId, env);
+        // Use waitUntil so the command runs even after we return 200 to Telegram.
+        ctx.waitUntil(handleCommand(text, chatId, env));
       }
     } catch (err) {
       console.error("Worker error:", err);
