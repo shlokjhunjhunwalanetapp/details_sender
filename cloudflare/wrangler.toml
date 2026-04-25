@@ -6,6 +6,10 @@ compatibility_date = "2024-09-23"
 [vars]
 GITHUB_REPO = "shlokjhunjhunwalanetapp/all_stock_details_sender"
 
+[[kv_namespaces]]
+binding = "PENDING_WATCHLIST"
+id = "f2cb00cd554b4ec3a3736a72f766ae85"
+
 # Secrets are NOT stored here — set them with:
 #   wrangler secret put TELEGRAM_BOT_TOKEN
 #   wrangler secret put TELEGRAM_CHAT_ID

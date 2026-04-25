@@ -391,15 +391,55 @@ async function handleCommand(text, chatId, env) {
   if (cmd === "updatestocks") {
     const tickers = parseTickersFromText(text, "updatestocks");
     if (!tickers.length) {
-      await sendMessage(
+      // Start visual builder — clear any stale pending state first.
+      await env.PENDING_WATCHLIST.put(chatId, JSON.stringify([]), { expirationTtl: 600 });
+      const current = await getPortfolio(env);
+      const currentStr = current.length ? current.join(", ") : "(empty)";
+      await sendMessageWithKeyboard(
         chatId,
-        "Replace your entire watchlist with new stocks.\n\nType the command followed by comma-separated symbols:\n\n/updatestocks RELIANCE, TCS, INFY, HAL, ZOMATO\n\nThis replaces everything in your current watchlist.",
+        `Build your new watchlist by searching stocks one at a time, then tap ✅ to save.\n\nCurrent watchlist: ${currentStr}\nNew list so far: (none yet)`,
+        {
+          inline_keyboard: [
+            [{ text: "🔍 Search & pick a stock", switch_inline_query_current_chat: ">" }],
+            [{ text: "✅ Save new watchlist (0 selected)", callback_data: "confirm_update" }],
+          ],
+        },
         env,
       );
       return;
     }
+    // Called with symbols directly (e.g. /updatestocks RELIANCE, TCS, HAL)
     await savePortfolio(tickers, env);
+    await env.PENDING_WATCHLIST.delete(chatId);
     await sendMessage(chatId, `Watchlist replaced.\n\n${await formatPortfolio(tickers, env)}`, env);
+    return;
+  }
+
+  // /pendingadd SYMBOL — adds one stock to the in-progress builder list
+  if (cmd === "pendingadd") {
+    const ticker = parseSingleTicker(text, "pendingadd");
+    if (!ticker) return;
+    const raw = await env.PENDING_WATCHLIST.get(chatId);
+    const pending = raw ? JSON.parse(raw) : [];
+    if (!pending.includes(ticker)) pending.push(ticker);
+    await env.PENDING_WATCHLIST.put(chatId, JSON.stringify(pending), { expirationTtl: 600 });
+    const registry = await getRegistry(env);
+    const lines = pending.map((t, i) => {
+      const name = registry[t] || t;
+      return `  ${i + 1}. ${name !== t ? `${name} (${t})` : t}`;
+    });
+    await sendMessageWithKeyboard(
+      chatId,
+      `Building new watchlist (${pending.length} stock${pending.length !== 1 ? "s" : ""}):\n${lines.join("\n")}\n\nTap 🔍 to add more or ✅ to save.`,
+      {
+        inline_keyboard: [
+          [{ text: "🔍 Add another stock", switch_inline_query_current_chat: ">" }],
+          [{ text: `✅ Save new watchlist (${pending.length} selected)`, callback_data: "confirm_update" }],
+          [{ text: "❌ Cancel", callback_data: "cancel_update" }],
+        ],
+      },
+      env,
+    );
     return;
   }
 }
@@ -413,7 +453,26 @@ async function handleCallbackQuery(callbackQuery, env) {
   // Acknowledge the tap immediately so the button stops spinning.
   await answerCallbackQuery(callbackQuery.id, "", env);
 
-  // Route to the same command handler.
+  if (data === "confirm_update") {
+    const raw = await env.PENDING_WATCHLIST.get(chatId);
+    const pending = raw ? JSON.parse(raw) : [];
+    if (!pending.length) {
+      await sendMessage(chatId, "No stocks selected yet. Use 🔍 to search and pick stocks first.", env);
+      return;
+    }
+    await savePortfolio(pending, env);
+    await env.PENDING_WATCHLIST.delete(chatId);
+    await sendMessage(chatId, `Watchlist saved!\n\n${await formatPortfolio(pending, env)}`, env);
+    return;
+  }
+
+  if (data === "cancel_update") {
+    await env.PENDING_WATCHLIST.delete(chatId);
+    await sendMessage(chatId, "Cancelled. Your previous watchlist is unchanged.", env);
+    return;
+  }
+
+  // Generic: route /command callback_data to the command handler.
   if (data.startsWith("/")) {
     await handleCommand(data, chatId, env);
   }
@@ -443,17 +502,27 @@ async function registerCommands(env) {
 // Enable in BotFather: /setinline → @yourbot → set placeholder text.
 // User types: @yourbot RELI   → sees matching stocks → taps to send /addstock
 async function handleInlineQuery(query, env) {
-  const q = query.query.trim().toUpperCase();
+  const raw = query.query.trim();
+  // Builder mode: query starts with ">" — results send /pendingadd instead of /addstock
+  const builderMode = raw.startsWith(">");
+  const q = (builderMode ? raw.slice(1) : raw).trim().toUpperCase();
   const registry = await getRegistry(env);
 
   let matches = [];
-  if (q.length === 0) {
-    // No query yet — show current watchlist stocks as quick suggestions.
+  if (q.length === 0 && !builderMode) {
+    // No query, normal mode — show current watchlist for quick removal.
     const tickers = await getPortfolio(env);
     matches = tickers.slice(0, 10).map((sym, i) => {
       const name = registry[sym] || sym;
       return makeInlineResult(i, sym, name, "Already in watchlist — tap to remove", `/removestock ${sym}`);
     });
+  } else if (q.length === 0 && builderMode) {
+    // Builder mode, no search text yet — show a prompt
+    matches = [{
+      type: "article", id: "hint", title: "Type a stock name or symbol to search…",
+      description: "e.g. RELIANCE, Tata, HDFC",
+      input_message_content: { message_text: "/updatestocks" },
+    }];
   } else {
     // Search: symbol prefix match first, then company name substring match.
     const prefixMatches = [];
@@ -467,8 +536,10 @@ async function handleInlineQuery(query, env) {
       if (prefixMatches.length + nameMatches.length >= 50) break;
     }
     const combined = [...prefixMatches, ...nameMatches].slice(0, 50);
+    const action = builderMode ? "Tap to add to new watchlist" : "Tap to add to watchlist";
+    const command = builderMode ? (sym) => `/pendingadd ${sym}` : (sym) => `/addstock ${sym}`;
     matches = combined.map(([sym, name], i) =>
-      makeInlineResult(i, sym, name, `Tap to add ${sym} to watchlist`, `/addstock ${sym}`)
+      makeInlineResult(i, sym, name, action, command(sym))
     );
   }
 
