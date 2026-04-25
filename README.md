@@ -34,6 +34,8 @@ python -m src.main --commands-only
 python -m src.main
 ```
 
+The app auto-loads values from `.env` using `python-dotenv`.
+
 ## GitHub Actions scheduling model
 
 GitHub Actions cannot natively run every minute. This project uses GitHub-only scheduling:
@@ -42,7 +44,7 @@ GitHub Actions cannot natively run every minute. This project uses GitHub-only s
   - runs every 5 minutes
   - bot logic sends full updates every 5 minutes during market hours and every 15 minutes during off-hours
 - `.github/workflows/telegram-webhook.yml`
-  - syncs `/updatestocks` command state every 5 minutes
+  - syncs `/updatestocks` command state every 5 minutes, offset by 2 minutes to reduce overlap
 
 ## Notes on request cap
 

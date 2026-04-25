@@ -4,6 +4,8 @@ import argparse
 import logging
 import sys
 
+from dotenv import load_dotenv
+
 from src.bot import run_bot_cycle
 from src.config import Config
 
@@ -24,6 +26,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    load_dotenv()
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",

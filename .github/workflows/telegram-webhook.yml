@@ -3,12 +3,15 @@ name: Telegram Command Sync
 on:
   workflow_dispatch:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "2-59/5 * * * *"
 
 jobs:
   sync-commands:
     runs-on: ubuntu-latest
     environment: TELEGRAM_BOT_TOKEN
+    concurrency:
+      group: stock-bot-state
+      cancel-in-progress: false
     permissions:
       contents: write
     steps:

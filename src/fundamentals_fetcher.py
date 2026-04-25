@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 from typing import Any
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 import yfinance as yf
 from bs4 import BeautifulSoup
 
@@ -12,6 +15,23 @@ from src.portfolio_parser import format_ticker_for_yfinance
 
 REQUEST_TIMEOUT = 20
 USER_AGENT = "Mozilla/5.0 (compatible; StockNewsBot/1.0; +https://github.com)"
+logger = logging.getLogger(__name__)
+
+
+def _build_retry_session() -> requests.Session:
+    session = requests.Session()
+    retry = Retry(
+        total=3,
+        read=3,
+        connect=3,
+        backoff_factor=0.5,
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=frozenset({"GET"}),
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
 
 
 @dataclass
@@ -113,7 +133,8 @@ def _from_yfinance(ticker: str) -> dict[str, str]:
 
 def _from_screener(ticker: str) -> dict[str, str]:
     url = f"https://www.screener.in/company/{ticker}/consolidated/"
-    response = requests.get(url, timeout=REQUEST_TIMEOUT, headers={"User-Agent": USER_AGENT})
+    session = _build_retry_session()
+    response = session.get(url, timeout=REQUEST_TIMEOUT, headers={"User-Agent": USER_AGENT})
     if response.status_code != 200:
         return {}
 
@@ -138,9 +159,9 @@ def fetch_fundamentals(ticker: str) -> StockFundamentals:
     try:
         metrics.update(_from_yfinance(ticker))
     except Exception:
-        pass
+        logger.exception("yfinance fundamentals fetch failed for %s", ticker)
     try:
         metrics.update(_from_screener(ticker))
     except Exception:
-        pass
+        logger.exception("Screener fundamentals fetch failed for %s", ticker)
     return StockFundamentals(ticker=ticker, metrics=metrics)

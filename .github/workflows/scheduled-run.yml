@@ -9,6 +9,9 @@ jobs:
   run-bot:
     runs-on: ubuntu-latest
     environment: TELEGRAM_BOT_TOKEN
+    concurrency:
+      group: stock-bot-state
+      cancel-in-progress: false
     permissions:
       contents: write
     steps:
