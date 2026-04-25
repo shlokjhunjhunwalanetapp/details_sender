@@ -71,6 +71,27 @@ const TICKER_TO_COMPANY = {
   PAYTM: "Paytm One97 Communications",
   POLICYBZR: "PB Fintech PolicyBazaar",
   MAPMYINDIA: "MapMyIndia CE Info Systems",
+  // Defence / PSU
+  HAL: "Hindustan Aeronautics",
+  BEL: "Bharat Electronics",
+  BHEL: "Bharat Heavy Electricals",
+  SAIL: "Steel Authority of India",
+  NMDC: "NMDC",
+  GAIL: "GAIL India",
+  IOC: "Indian Oil Corporation",
+  HPCL: "Hindustan Petroleum Corporation",
+  RECLTD: "REC Limited",
+  PFC: "Power Finance Corporation",
+  IRFC: "Indian Railway Finance Corporation",
+  CONCOR: "Container Corporation of India",
+  NBCC: "NBCC India",
+  NHPC: "NHPC",
+  SJVN: "SJVN",
+  COCHINSHIP: "Cochin Shipyard",
+  MAZAGON: "Mazagon Dock Shipbuilders",
+  GRSE: "Garden Reach Shipbuilders",
+  BDL: "Bharat Dynamics",
+  BEML: "BEML",
 };
 
 const HELP_TEXT = `Stock News Bot — Commands

@@ -109,6 +109,11 @@ class TelegramClient:
             params={"offset": offset, "timeout": 0},
             timeout=25,
         )
+        # 409 means a webhook is active — polling and webhooks are mutually
+        # exclusive. Return empty list so the news cycle still runs normally.
+        if response.status_code == 409:
+            logger.debug("getUpdates returned 409: webhook is active, skipping polling.")
+            return []
         response.raise_for_status()
         payload = response.json()
         self._raise_for_telegram_api(payload)
