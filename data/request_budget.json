@@ -1,5 +1,8 @@
 {
   "telegram_offset": 0,
-  "sent_hashes": [],
-  "last_full_cycle_at": "2026-04-25T23:55:14.980249+00:00"
+  "sent_hashes": [
+    "351587bd507d4434704bfc5f927e8e5309f1667f394a72c0d0c3de79604704de",
+    "96a951fe544e87d0e8311964de6d5755c949ae2114af3206a2fdc1502999cdfb"
+  ],
+  "last_full_cycle_at": "2026-04-26T03:37:58.130180+00:00"
 }
